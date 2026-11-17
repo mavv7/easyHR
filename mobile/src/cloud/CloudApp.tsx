@@ -3,7 +3,7 @@ import { AppState, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleS
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
-import { configured, supabase } from './client';
+import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { CloudEmployee, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
 import { weekdays } from '../domain';
 
@@ -35,7 +35,7 @@ export default function CloudApp({ onDemo }: { onDemo: () => void }) {
 }
 function SignIn() {
   const [email, setEmail] = useState(''), [password, setPassword] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
-  const [mode, setMode] = useState<'signin' | 'company' | 'member'>('signin');
+  const [mode, setMode] = useState<'signin' | 'company' | 'member' | 'recovery'>('signin');
   const [company, setCompany] = useState('');
   async function authenticate() {
     const signup = mode !== 'signin';
@@ -56,6 +56,13 @@ function SignIn() {
       setPassword('');
     } catch (err) { setMessage((err as Error).message); } finally { setBusy(false); }
   }
+  if (mode === 'recovery') return <PasswordRecovery initialEmail={email} onBack={(notice, address) => {
+    setMode('signin');
+    setEmail(address);
+    setPassword('');
+    setMessage(notice);
+  }} />;
+
   return <View style={s.card}>
     <Text style={s.heading}>{mode === 'company' ? 'Register your company' : mode === 'member' ? 'Activate company access' : 'Sign in to easyHR'}</Text>
     {mode === 'company' && <Field label="Company name" value={company} onChange={setCompany} />}
@@ -67,9 +74,105 @@ function SignIn() {
     {mode === 'signin' ? <>
       <Button label="Register a company" disabled={busy} onPress={() => { setMode('company'); setMessage(''); }} secondary />
       <Button label="Activate HR-approved access" disabled={busy} onPress={() => { setMode('member'); setMessage(''); }} secondary />
+      <Button label="Forgot password?" disabled={busy} onPress={() => setMode('recovery')} secondary />
     </> : <Button label="Back to sign in" disabled={busy} onPress={() => { setMode('signin'); setMessage(''); }} secondary />}
   </View>;
 }
+
+function PasswordRecovery({ initialEmail, onBack }: { initialEmail: string; onBack: (notice: string, address: string) => void }) {
+  const [email, setEmail] = useState(initialEmail);
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [step, setStep] = useState<'request' | 'verify' | 'password'>('request');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const recovery = useRef<ReturnType<typeof createPasswordRecoveryClient> | null>(null);
+  const working = useRef(false);
+
+  async function submit() {
+    if (working.current) return;
+    working.current = true;
+    setBusy(true);
+    setMessage('');
+    try {
+      if (step === 'request') {
+        const address = email.trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+          setMessage('Enter a valid work email.');
+          return;
+        }
+        const { error } = await supabase!.auth.resetPasswordForEmail(address);
+        if (error && error.code !== 'user_not_found') {
+          setMessage('Could not request a code. Try again in a minute.');
+          return;
+        }
+        setEmail(address);
+        setStep('verify');
+        setMessage('If the address is registered, you’ll receive a password reset code.');
+      } else if (step === 'verify') {
+        const token = code.trim();
+        if (!/^\d+$/.test(token)) {
+          setMessage('Enter the code from your reset email.');
+          return;
+        }
+        recovery.current ??= createPasswordRecoveryClient();
+        const { data, error } = await recovery.current.auth.verifyOtp({ email, token, type: 'recovery' });
+        if (error || !data.session) {
+          setMessage('This code could not be verified. Check it or request a new code.');
+          return;
+        }
+        setCode('');
+        setStep('password');
+      } else {
+        if (password.length < 8 || password !== confirmation) {
+          setMessage('Use at least 8 characters and enter the same password twice.');
+          return;
+        }
+        const auth = recovery.current!.auth;
+        const { error } = await auth.updateUser({ password });
+        if (error) {
+          setMessage(error.code === 'session_not_found' ? 'Your recovery session expired. Request a new code.' : error.message);
+          return;
+        }
+        recovery.current = null;
+        void auth.signOut({ scope: 'local' }).catch(() => {});
+        onBack('Password updated. Sign in with your new password.', email);
+      }
+    } catch {
+      setMessage('Could not complete password recovery. Try again.');
+    } finally {
+      working.current = false;
+      setBusy(false);
+    }
+  }
+
+  function clearRecovery() {
+    const client = recovery.current;
+    recovery.current = null;
+    if (step === 'password') void client?.auth.signOut({ scope: 'local' }).catch(() => {});
+    setCode('');
+    setPassword('');
+    setConfirmation('');
+    setMessage('');
+    setStep('request');
+  }
+
+  return <View style={s.card}>
+    <Text style={s.heading}>Reset your password</Text>
+    {step === 'request' && <Field label="Work email" value={email} onChange={setEmail} />}
+    {step === 'verify' && <Field label="Email code" value={code} onChange={setCode} />}
+    {step === 'password' && <>
+      <Field label="New password" value={password} onChange={setPassword} secure />
+      <Field label="Confirm new password" value={confirmation} onChange={setConfirmation} secure />
+    </>}
+    {!!message && <Text accessibilityRole="alert" style={s.subtitle}>{message}</Text>}
+    <Button label={step === 'request' ? 'Send reset code' : step === 'verify' ? 'Verify code' : 'Save new password'} disabled={busy} onPress={() => void submit()} />
+    {step !== 'request' && <Button label="Request a new code" disabled={busy} secondary onPress={clearRecovery} />}
+    <Button label="Back to sign in" disabled={busy} secondary onPress={() => { clearRecovery(); onBack('', email); }} />
+  </View>;
+}
+
 function CompanyWorkspace({ session }: { session: Session }) {
   const [organizations, setOrganizations] = useState<Organization[]>([]), [org, setOrg] = useState(''), [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(true), [message, setMessage] = useState('');

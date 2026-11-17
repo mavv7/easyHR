@@ -26,3 +26,16 @@ const storage = {
 export const supabase = configured ? createClient(url!, key!, {
   auth: { storage, autoRefreshToken: true, persistSession: true, detectSessionInUrl: false, lock: processLock },
 }) : null;
+
+// A verified recovery code grants a temporary session. Keep it out of the
+// workspace client's session store and auth state listener.
+export function createPasswordRecoveryClient() {
+  return createClient(url!, key!, {
+    auth: {
+      storageKey: 'easyhr-password-recovery',
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}

@@ -19,6 +19,17 @@ The connected MVP implements accounts, organization membership, employee records
 5. As HR, refresh and approve the request. The request and employee balance update atomically. Refresh the employee app to see the outcome. Data also refreshes on foreground and every 30 seconds while active; this is polling, not Supabase Realtime.
 6. For manager approval, grant a verified account Manager access, then edit the employee and assign that manager. Managers see only their own record and assigned reports. Nobody can approve their own leave.
 
+## Password recovery
+
+In Supabase Authentication, edit the **Reset Password** email template so it includes the one-time code. For example, use the subject `Reset your easyHR password` and this body:
+
+```html
+<p>Your easyHR password reset code is <strong>{{ .Token }}</strong>.</p>
+<p>Enter this code in easyHR to choose a new password.</p>
+```
+
+In easyHR, select **Forgot password?**, request a code, enter it, and choose a new password. Sign in again with the new password. The recovery session stays in memory and is isolated from the workspace session. Test delivery to a controlled inbox before enabling recovery for a team.
+
 ## Access and data design
 
 - Each company is a tenant in the shared PostgreSQL database. Memberships, employees, leave and audit events are nested under its organization ID, with composite foreign keys enforcing company ownership on employee and leave links.
@@ -47,7 +58,7 @@ The database test applies the actual migration to PGlite (PostgreSQL in WASM), w
 
 - Review RLS in Supabase and run the acceptance flow with at least two organizations and HR, manager and employee accounts.
 - Verify role changes and revocation under Workspace. HR can manage other members, with the workspace owner and the signed-in administrator protected. Revocation preserves employee and leave records, clears linked access and manager assignments, and records an audit event.
-- Add password recovery, MFA and account lifecycle handling.
+- Verify email delivery for password recovery and add MFA and account lifecycle handling.
 - Confirm backup/PITR availability for your Supabase plan and perform a restore drill. Backups are a project configuration requirement, not something this migration enables.
 - Configure email delivery, rate limits, monitoring and data retention. Validate privacy/consent policies and employee access with the organization.
 - Leave currently excludes weekends only. Zambia public holidays, partial days, leave types, accruals, cancellations and statutory rules remain follow-on work.
