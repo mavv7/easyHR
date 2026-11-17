@@ -16,6 +16,7 @@ test('database isolation, authorization and atomic leave workflow', async t => {
     await db.exec(await readFile(new URL('../supabase/migrations/202611180001_hr_foundation.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180002_company_signup.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180003_manage_members.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/202611180004_pending_requests.sql', import.meta.url), 'utf8'));
     for (const [id, name, company] of [[ids.hr, 'hr', 'Mango Studio'], [ids.outsider, 'outsider', 'Other company']]) {
       await db.query('insert into auth.users values ($1, $2, null, $3)', [id, name + '@example.com', { company_name: company }]);
     }
@@ -112,6 +113,47 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await as(ids.employee);
       await scalar("select public.hr_request_leave($1,'2027-03-01','2027-03-05','Replacement request')", [employee]);
     });
+    await t.test('cancelling pending leave frees the date range and reservation without deducting balance', async () => {
+      await as(ids.employee);
+      const requestLeave = "select public.hr_request_leave($1,'2027-03-08','2027-03-09','Two days')";
+      const pending = await scalar(requestLeave, [employee]);
+      await assert.rejects(db.query(requestLeave, [employee]), /overlaps/);
+      await as(ids.manager);
+      await assert.rejects(db.query('select public.hr_cancel_leave($1)', [pending]), /unavailable/);
+      await as(ids.outsider);
+      await assert.rejects(db.query('select public.hr_cancel_leave($1)', [pending]), /unavailable/);
+      await as(ids.employee);
+      await assert.rejects(db.query('select public.hr_cancel_leave($1)', [request!]), /Only pending/);
+      await db.query('select public.hr_cancel_leave($1)', [pending]);
+      await assert.rejects(db.query('select public.hr_cancel_leave($1)', [pending]), /Only pending/);
+      assert.equal(await scalar('select status from public.hr_leave_requests where id=$1', [pending]), 'Cancelled');
+      const replacement = await scalar(requestLeave, [employee]);
+      await as(ids.hr);
+      await db.query('select public.hr_cancel_leave($1)', [replacement]);
+      await assert.rejects(db.query('select public.hr_decide_leave($1,true)', [pending]), /already processed/);
+      assert.equal(Number(await scalar('select leave_balance from public.hr_employees where id=$1', [employee])), 7);
+      assert.equal(Number(await scalar("select count(*) from public.hr_audit_events where action='leave.cancelled'")), 2);
+    });
+    await t.test('HR can view and withdraw only its company’s pending invitations', async () => {
+      const list = 'select * from public.hr_list_invitations($1)';
+      const cancel = 'select public.hr_cancel_invitation($1,$2,$3,$4)';
+      const email = 'withdraw@example.com';
+      await as(ids.hr);
+      await db.query("select public.hr_add_member($1,$2,'employee')", [org, email]);
+      assert.deepEqual((await db.query(list, [org])).rows, [{ email, role: 'employee', employee_id: null }]);
+      for (const id of [ids.employee, ids.outsider]) {
+        await as(id);
+        assert.equal((await db.query(list, [org])).rows.length, 0);
+        await assert.rejects(db.query(cancel, [org, email, 'employee', null]), /HR access required/);
+      }
+      await as(ids.hr);
+      await assert.rejects(db.query(cancel, [org, email, 'manager', null]), /authorization changed/);
+      await db.query(cancel, [org, email, 'employee', null]);
+      assert.equal((await db.query(list, [org])).rows.length, 0);
+      assert.equal(Number(await scalar("select count(*) from public.hr_audit_events where action='invitation.cancelled'")), 1);
+      await db.exec('reset role');
+      await assert.rejects(db.query("insert into auth.users values(gen_random_uuid(), $1, null, '{}')", [email]), /approval required/);
+    });
     await t.test('HR can demote and revoke company members while retaining employee and leave records', async () => {
       const manage = 'select public.hr_manage_member($1,$2,$3,$4)';
       await as(ids.employee);
@@ -138,6 +180,8 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await db.exec('reset role; set role anon');
       await assert.rejects(db.query('select * from public.hr_employees'));
       await assert.rejects(db.query('select public.hr_activate_workspace()'));
+      await assert.rejects(db.query('select public.hr_cancel_leave(null)'));
+      await assert.rejects(db.query('select public.hr_list_invitations(null)'));
     });
   } finally { await db.close(); }
 });

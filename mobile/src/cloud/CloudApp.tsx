@@ -177,6 +177,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const [organizations, setOrganizations] = useState<Organization[]>([]), [org, setOrg] = useState(''), [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(true), [message, setMessage] = useState('');
   const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [showAccess, setShowAccess] = useState(false), [search, setSearch] = useState('');
+  const [showAccount, setShowAccount] = useState(false);
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
   const params = useLocalSearchParams<{ cloudtab?: string }>();
   const tab = ['People', 'Leave', 'Activity', 'Workspace'].includes(params.cloudtab || '') ? params.cloudtab! : 'People';
@@ -188,11 +189,11 @@ function CompanyWorkspace({ session }: { session: Session }) {
       if (!org) await rpc('hr_activate_workspace', {});
       const list = await loadOrganizations();
       const selected = list.some(o => o.id === org) ? org : list[0]?.id || '';
-      const data = selected ? await loadSnapshot(selected) : emptySnapshot;
+      const data = selected ? await loadSnapshot(selected, session.user.id) : emptySnapshot;
       if (mounted.current && ticket === generation.current) { setOrganizations(list); setOrg(selected); setSnapshot(data); }
     } catch (err) { if (mounted.current && ticket === generation.current) { setSnapshot(emptySnapshot); setMessage((err as Error).message); } }
     finally { if (mounted.current && ticket === generation.current) setFetching(false); }
-  }, [org]);
+  }, [org, session.user.id]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { const initial = setTimeout(() => void refresh(), 0); const interval = setInterval(() => { if (AppState.currentState === 'active' && !mutation.current) void refresh(); }, 30000); const sub = AppState.addEventListener('change', state => { if (state === 'active' && !mutation.current) void refresh(); }); return () => { clearTimeout(initial); clearInterval(interval); sub.remove(); }; }, [refresh]);
   async function act(work: () => Promise<unknown>, success: string) {
@@ -208,9 +209,21 @@ function CompanyWorkspace({ session }: { session: Session }) {
     <View style={s.row}><View style={{ flex: 1 }}><Text style={s.logo}>easy<Text style={{ color: '#ED631C' }}>HR.</Text></Text><Text style={s.subtitle}>{currentName || 'Your workspace'} · Zambia · ZMW</Text></View><Button label="Sign out" disabled={busy} secondary onPress={() => void act(async () => { const { error } = await supabase!.auth.signOut({ scope: 'local' }); if (error) throw error; }, 'Signed out')} /></View>
     <Text style={s.small}>{session.user.email} · {membership?.role?.toUpperCase() || 'No company role yet'}</Text>
     {!!message && <Text accessibilityRole="alert" style={s.message}>{message}</Text>}
-    <View style={s.row}><Button label={fetching ? 'Refreshing…' : 'Refresh'} onPress={() => void refresh()} disabled={fetching || busy} secondary /><Text style={s.small}>Refreshes every 30 seconds while active.</Text></View>
-    {!org && !fetching && <View style={s.card}><Text style={s.heading}>Waiting for company access</Text><Text style={s.subtitle}>Confirm your work email or ask your HR administrator to authorize access, then refresh.</Text></View>}
-    {!!org && <>
+    <View style={s.row}>
+      {!showAccount && <Button label={fetching ? 'Refreshing…' : 'Refresh'} onPress={() => void refresh()} disabled={fetching || busy} secondary />}
+      <Button label={showAccount ? 'Back to workspace' : 'Account'} onPress={() => setShowAccount(!showAccount)} disabled={busy} secondary />
+    </View>
+    {showAccount && <AccountSettings busy={busy}
+      onPasswordChange={(currentPassword, password) => act(async () => {
+        const { error } = await supabase!.auth.updateUser({ current_password: currentPassword, password });
+        if (error) throw error;
+      }, 'Password updated')}
+      onEndOtherSessions={() => act(async () => {
+        const { error } = await supabase!.auth.signOut({ scope: 'others' });
+        if (error) throw error;
+      }, 'Other sessions were signed out')} />}
+    {!showAccount && !org && !fetching && <View style={s.card}><Text style={s.heading}>Waiting for company access</Text><Text style={s.subtitle}>Confirm your work email or ask your HR administrator to authorize access, then refresh.</Text></View>}
+    {!showAccount && !!org && <>
       {organizations.length > 1 && <View style={s.row}>{organizations.map(o => <Button key={o.id} label={o.name} disabled={busy || fetching} secondary={org !== o.id} onPress={() => { generation.current++; setSnapshot(emptySnapshot); setEditor(null); setShowLeave(false); setShowAccess(false); setOrg(o.id); }} />)}</View>}
       <View style={s.row}>{['People', 'Leave', ...(isHR ? ['Activity', 'Workspace'] : [])].map(t => <Button key={t} label={t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
       {tab === 'People' && <View style={s.card}><View style={s.row}><Text style={s.heading}>People · {snapshot.employees.length}</Text>{isHR && <Button label="Add employee" disabled={busy} onPress={() => setEditor('new')} />}</View><Field label="Search people" value={search} onChange={setSearch} />
@@ -221,7 +234,23 @@ function CompanyWorkspace({ session }: { session: Session }) {
       {tab === 'Leave' && <View style={s.card}><Text style={s.heading}>Leave requests</Text><Text style={s.small}>Current policy: whole weekdays only. Public holidays and statutory accrual are not configured. Pending requests reserve available days.</Text><Button label="Request leave" disabled={busy || !eligible.length} onPress={() => setShowLeave(true)} />
         {showLeave && <LeaveForm employees={eligible} busy={busy} onCancel={() => setShowLeave(false)} onSave={async values => { const ok = await act(() => rpc('hr_request_leave', values), 'Leave submitted'); if (ok) setShowLeave(false); }} />}
         {!snapshot.leave.length && <Text style={s.subtitle}>No leave requests yet.</Text>}
-        {snapshot.leave.map(l => { const e = snapshot.employees.find(e => e.id === l.employee_id); const canApprove = e?.user_id !== session.user.id && (isHR || (membership?.role === 'manager' && e?.manager_user_id === session.user.id)); return <View key={l.id} style={s.card}><Text style={s.heading}>{e?.name || 'Employee'}</Text><Text style={s.subtitle}>{l.start_date} → {l.end_date} · {l.days} days</Text><Text>{l.reason}</Text><Text style={s.label}>{l.status}</Text>{l.status === 'Pending' && canApprove && <View style={s.row}><Button label="Approve" disabled={busy} onPress={() => void act(() => rpc('hr_decide_leave', { p_id: l.id, p_approve: true }), 'Leave approved and balance updated')} /><Button label="Decline" disabled={busy} secondary onPress={() => void act(() => rpc('hr_decide_leave', { p_id: l.id, p_approve: false }), 'Leave declined')} /></View>}</View>; })}
+        {snapshot.leave.map(leave => {
+          const employee = snapshot.employees.find(e => e.id === leave.employee_id);
+          const ownLeave = employee?.user_id === session.user.id || employee?.email === session.user.email?.toLowerCase();
+          const canApprove = !ownLeave && (isHR || (membership?.role === 'manager' && employee?.manager_user_id === session.user.id));
+          const canCancel = isHR || employee?.user_id === session.user.id;
+          return <View key={leave.id} style={s.card}>
+            <Text style={s.heading}>{employee?.name || 'Employee'}</Text>
+            <Text style={s.subtitle}>{leave.start_date} → {leave.end_date} · {leave.days} days</Text>
+            <Text>{leave.reason}</Text><Text style={s.label}>{leave.status}</Text>
+            {leave.status === 'Pending' && canApprove && <View style={s.row}>
+              <Button label="Approve" disabled={busy} onPress={() => void act(() => rpc('hr_decide_leave', { p_id: leave.id, p_approve: true }), 'Leave approved and balance updated')} />
+              <Button label="Decline" disabled={busy} secondary onPress={() => void act(() => rpc('hr_decide_leave', { p_id: leave.id, p_approve: false }), 'Leave declined')} />
+            </View>}
+            {leave.status === 'Pending' && canCancel && <ConfirmedAction label="Cancel leave request" confirmLabel="Confirm cancellation" busy={busy}
+              onConfirm={() => act(() => rpc('hr_cancel_leave', { p_id: leave.id }), 'Leave request cancelled')} />}
+          </View>;
+        })}
       </View>}
       {tab === 'Activity' && isHR && <View style={s.card}><Text style={s.heading}>Server activity history</Text><Text style={s.small}>Latest 100 events. Events are written by database functions and cannot be edited by app users.</Text>{snapshot.audit.map(a => <View key={a.id} style={s.listItem}><View><Text style={s.label}>{a.action}</Text><Text style={s.small}>{new Date(a.created_at).toLocaleString()}</Text><Text selectable style={s.small}>Actor: {a.actor_id}</Text><Text selectable style={s.small}>Record: {a.record_id}</Text></View></View>)}</View>}
       {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(member => <MemberAccess
@@ -234,6 +263,18 @@ function CompanyWorkspace({ session }: { session: Session }) {
           p_organization_id: org, p_user_id: member.user_id, p_expected_role: member.role, p_role: role,
         }), role ? 'Workspace role updated' : 'Workspace access revoked')}
       />)}</View>}
+      {tab === 'Workspace' && isHR && snapshot.invitations !== null && <View style={s.card}>
+        <Text style={s.heading}>Pending authorizations</Text>
+        {!snapshot.invitations.length && <Text style={s.small}>No pending authorizations.</Text>}
+        {snapshot.invitations.map(invitation => <View key={JSON.stringify([org, invitation])} style={s.form}>
+          <Text style={s.label}>{invitation.email}</Text>
+          <Text style={s.small}>{invitation.role.toUpperCase()}</Text>
+          <ConfirmedAction label="Withdraw authorization" confirmLabel="Confirm withdrawal" busy={busy}
+            onConfirm={() => act(() => rpc('hr_cancel_invitation', {
+              p_organization_id: org, p_email: invitation.email, p_expected_role: invitation.role, p_expected_employee_id: invitation.employee_id,
+            }), 'Authorization withdrawn')} />
+        </View>)}
+      </View>}
     </>}
     <Text style={s.small}>Connected MVP: employee records and leave. Payroll, contracts, attendance and compliance remain in the separate fictional demo.</Text>
   </ScrollView>;
@@ -253,6 +294,58 @@ function LeaveForm({ employees, busy, onCancel, onSave }: SaveForm & { employees
   function save() { try { weekdays(start, end); if (!employee || !reason.trim()) throw Error('Choose an employee and enter a reason.'); void onSave({ p_employee_id: employee, p_start: start, p_end: end, p_reason: reason }); } catch (err) { setError((err as Error).message); } }
   return <View style={s.form}><Text style={s.heading}>New leave request</Text><View style={s.row}>{employees.map(e => <Button key={e.id} label={e.name} secondary={employee !== e.id} onPress={() => setEmployee(e.id)} />)}</View><Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} /><Field label="End date (YYYY-MM-DD)" value={end} onChange={setEnd} /><Field label="Reason" value={reason} onChange={setReason} />{!!error && <Text style={s.error}>{error}</Text>}<View style={s.row}><Button label="Submit request" disabled={busy} onPress={save} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
 }
+function AccountSettings({ busy, onPasswordChange, onEndOtherSessions }: {
+  busy: boolean;
+  onPasswordChange: (currentPassword: string, password: string) => Promise<boolean>;
+  onEndOtherSessions: () => Promise<boolean>;
+}) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [message, setMessage] = useState('');
+
+  async function savePassword() {
+    if (!currentPassword || password.length < 8 || password !== confirmation) {
+      setMessage('Enter your current password and enter the same new password twice. Use at least 8 characters.');
+      return;
+    }
+    setMessage('');
+    if (await onPasswordChange(currentPassword, password)) {
+      setCurrentPassword('');
+      setPassword('');
+      setConfirmation('');
+    }
+  }
+
+  return <>
+    <View style={s.card}>
+      <Text style={s.heading}>Change password</Text>
+      <Field label="Current password" value={currentPassword} onChange={setCurrentPassword} secure />
+      <Field label="New password" value={password} onChange={setPassword} secure />
+      <Field label="Confirm new password" value={confirmation} onChange={setConfirmation} secure />
+      {!!message && <Text accessibilityRole="alert" style={s.error}>{message}</Text>}
+      <Button label="Save password" disabled={busy} onPress={() => void savePassword()} />
+    </View>
+    <View style={s.card}>
+      <Text style={s.heading}>Other sessions</Text>
+      <ConfirmedAction label="Sign out other sessions" confirmLabel="Confirm sign out" busy={busy} onConfirm={onEndOtherSessions} />
+    </View>
+  </>;
+}
+
+function ConfirmedAction({ label, confirmLabel, busy, onConfirm }: {
+  label: string;
+  confirmLabel: string;
+  busy: boolean;
+  onConfirm: () => Promise<boolean>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return confirming ? <View style={s.row}>
+    <Button label={confirmLabel} disabled={busy} onPress={async () => { if (await onConfirm()) setConfirming(false); }} />
+    <Button label="Keep" disabled={busy} secondary onPress={() => setConfirming(false)} />
+  </View> : <Button label={label} disabled={busy} secondary onPress={() => setConfirming(true)} />;
+}
+
 function MemberAccess({ member, name, protectedAccess, busy, onSave }: {
   member: Member;
   name?: string;

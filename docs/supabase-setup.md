@@ -30,6 +30,8 @@ In Supabase Authentication, edit the **Reset Password** email template so it inc
 
 In easyHR, select **Forgot password?**, request a code, enter it, and choose a new password. Sign in again with the new password. The recovery session stays in memory and is isolated from the workspace session. Test delivery to a controlled inbox before enabling recovery for a team.
 
+Signed-in users can also open **Account** to change their password using their current password or sign out other sessions. Supabase invalidates other refresh sessions while keeping the current session active. Previously issued access tokens can last until they expire.
+
 ## Access and data design
 
 - Each company is a tenant in the shared PostgreSQL database. Memberships, employees, leave and audit events are nested under its organization ID, with composite foreign keys enforcing company ownership on employee and leave links.
@@ -61,7 +63,9 @@ The database test applies the actual migration to PGlite (PostgreSQL in WASM), w
 - Verify email delivery for password recovery and add MFA and account lifecycle handling.
 - Confirm backup/PITR availability for your Supabase plan and perform a restore drill. Backups are a project configuration requirement, not something this migration enables.
 - Configure email delivery, rate limits, monitoring and data retention. Validate privacy/consent policies and employee access with the organization.
-- Leave currently excludes weekends only. Zambia public holidays, partial days, leave types, accruals, cancellations and statutory rules remain follow-on work.
+- Employees and HR can cancel pending leave, which releases reserved days and permits a replacement request for the same dates. Approved leave stays in the history with its balance deduction.
+- HR can withdraw pending authorizations under Workspace. If the employee has already activated access, HR can revoke it from the active member list.
+- Leave currently excludes weekends only. Zambia public holidays, partial days, leave types, accruals and statutory rules remain follow-on work.
 - Payroll, contracts, compliance and attendance are still demo-only; document uploads and salary data are not part of these new tables.
 - Pagination and large-company performance need additional work before exceeding the hosted API row cap (typically 1,000 records per query).
 - Produce a development/internal build with the SecureStore config plugin, then verify signed Android/iOS behavior on physical devices. No hosted migration, backup configuration or signed build is implied by local checks passing.

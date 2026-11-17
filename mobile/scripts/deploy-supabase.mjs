@@ -54,7 +54,12 @@ try {
     await client.query('begin');
     await client.query("set local lock_timeout = '5s'");
     await client.query("select pg_advisory_xact_lock(hashtext('easyhr-foundation-migration'))");
-    for (const file of ['202611180001_hr_foundation.sql', '202611180002_company_signup.sql', '202611180003_manage_members.sql']) {
+    for (const file of [
+      '202611180001_hr_foundation.sql',
+      '202611180002_company_signup.sql',
+      '202611180003_manage_members.sql',
+      '202611180004_pending_requests.sql',
+    ]) {
       const version = file.split('_')[0];
       const migration = await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8');
       const checksum = createHash('sha256').update(migration.replace(/\r\n/g, '\n')).digest('hex');
@@ -94,8 +99,8 @@ try {
     has_function_privilege('anon',p.oid,'EXECUTE') as anon_execute,
     has_function_privilege('authenticated',p.oid,'EXECUTE') as authenticated_execute
     from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'hr_%'`);
-  if (functions.rows.length !== 6 || functions.rows.some(f => !f.prosecdef || f.anon_execute || !f.authenticated_execute)) throw new Error('RPC permissions verification failed.');
-  console.log('Verified all five tables and all six authorized RPC functions.');
+  if (functions.rows.length !== 9 || functions.rows.some(f => !f.prosecdef || f.anon_execute || !f.authenticated_execute)) throw new Error('RPC permissions verification failed.');
+  console.log('Verified all five tables and all nine authorized RPC functions.');
   if (process.argv.includes('--verify-workflow')) await verifyLiveWorkflow(client);
 } catch (error) {
   await client.query('rollback').catch(() => {});
