@@ -10,18 +10,45 @@ test('database isolation, authorization and atomic leave workflow', async t => {
   const ids = { hr: '00000000-0000-4000-8000-000000000001', employee: '00000000-0000-4000-8000-000000000002', manager: '00000000-0000-4000-8000-000000000003', outsider: '00000000-0000-4000-8000-000000000004' };
   try {
     await db.exec(`create role anon; create role authenticated; create schema auth;
-      create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz);
+      create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz, raw_user_meta_data jsonb);
       create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
       grant usage on schema auth to authenticated, anon; grant execute on function auth.uid() to authenticated, anon;`);
-    for (const [name, id] of Object.entries(ids)) await db.query('insert into auth.users values ($1, $2, now())', [id, name + '@example.com']);
     await db.exec(await readFile(new URL('../supabase/migrations/202611180001_hr_foundation.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/202611180002_company_signup.sql', import.meta.url), 'utf8'));
+    for (const [id, name, company] of [[ids.hr, 'hr', 'Mango Studio'], [ids.outsider, 'outsider', 'Other company']]) {
+      await db.query('insert into auth.users values ($1, $2, null, $3)', [id, name + '@example.com', { company_name: company }]);
+    }
+    await assert.rejects(db.query("insert into auth.users values (gen_random_uuid(), 'uninvited@example.com', null, '{}')"), /approval required/);
     async function as(user: string) { await db.exec('reset role'); await db.query("select set_config('request.jwt.claim.sub', $1, false)", [user]); await db.exec('set role authenticated'); }
     async function scalar(sql: string, args: unknown[] = []) { const r = await db.query<Record<string, string>>(sql, args); return Object.values(r.rows[0])[0]; }
     await as(ids.hr);
-    const org = await scalar("select public.hr_create_organization('Mango Studio')");
+    await db.query('select public.hr_activate_workspace()');
+    assert.equal((await db.query('select * from public.hr_organizations')).rows.length, 0);
+    await assert.rejects(db.query("select easyhr_private.hr_create_organization('Bypass')"), /permission denied/);
+    await db.exec('reset role; update auth.users set email_confirmed_at = now()');
+    await as(ids.hr);
+    await db.query('select public.hr_activate_workspace()');
+    await db.query('select public.hr_activate_workspace()');
+    assert.equal((await db.query('select * from public.hr_organizations')).rows.length, 1);
+    const org = await scalar('select id from public.hr_organizations');
     await db.query("select public.hr_add_member($1, 'manager@example.com', 'manager')", [org]);
+    await db.exec('reset role');
+    await db.query("insert into auth.users values ($1, 'manager@example.com', now(), '{}')", [ids.manager]);
+    await as(ids.manager);
+    await db.query('select public.hr_activate_workspace()');
+    await as(ids.hr);
     const employee = await scalar("select public.hr_save_employee($1, 'Employee One', 'Designer', 'Design', 'employee@example.com', 10, $2)", [org, ids.manager]);
     await db.query("select public.hr_add_member($1, 'employee@example.com', 'employee', $2)", [org, employee]);
+    await db.exec('reset role');
+    await db.query("insert into auth.users values ($1, 'employee@example.com', null, '{}')", [ids.employee]);
+    await as(ids.employee);
+    await db.query('select public.hr_activate_workspace()');
+    assert.equal((await db.query('select * from public.hr_members')).rows.length, 0);
+    await db.exec('reset role');
+    await db.query('update auth.users set email_confirmed_at = now() where id = $1', [ids.employee]);
+    await as(ids.employee);
+    await db.query('select public.hr_activate_workspace()');
+    await as(ids.hr);
     const ownerEmployee = await scalar("select public.hr_save_employee($1, 'HR Owner', 'HR', 'People', 'hr@example.com', 15)", [org]);
     await t.test('self-approval is blocked even before the HR employee record is linked', async () => {
       const own = await scalar("select public.hr_request_leave($1,'2027-02-01','2027-02-02','Personal')", [ownerEmployee]);
@@ -60,7 +87,8 @@ test('database isolation, authorization and atomic leave workflow', async t => {
     });
     await t.test('another company cannot read or mutate tenant data', async () => {
       await as(ids.outsider);
-      await scalar("select public.hr_create_organization('Other company')");
+      await db.query('select public.hr_activate_workspace()');
+      assert.notEqual(await scalar('select id from public.hr_organizations'), org);
       assert.equal((await db.query('select * from public.hr_employees')).rows.length, 0);
       assert.equal((await db.query('select * from public.hr_leave_requests')).rows.length, 0);
       await assert.rejects(db.query('select public.hr_decide_leave($1,false)', [request!]));
@@ -86,7 +114,7 @@ test('database isolation, authorization and atomic leave workflow', async t => {
     await t.test('anonymous sessions cannot read tables or execute write functions', async () => {
       await db.exec('reset role; set role anon');
       await assert.rejects(db.query('select * from public.hr_employees'));
-      await assert.rejects(db.query("select public.hr_create_organization('Forbidden')"));
+      await assert.rejects(db.query('select public.hr_activate_workspace()'));
     });
   } finally { await db.close(); }
 });
