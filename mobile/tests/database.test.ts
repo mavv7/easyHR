@@ -15,6 +15,7 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       grant usage on schema auth to authenticated, anon; grant execute on function auth.uid() to authenticated, anon;`);
     await db.exec(await readFile(new URL('../supabase/migrations/202611180001_hr_foundation.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180002_company_signup.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/202611180003_manage_members.sql', import.meta.url), 'utf8'));
     for (const [id, name, company] of [[ids.hr, 'hr', 'Mango Studio'], [ids.outsider, 'outsider', 'Other company']]) {
       await db.query('insert into auth.users values ($1, $2, null, $3)', [id, name + '@example.com', { company_name: company }]);
     }
@@ -110,6 +111,28 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       assert.equal(Number(await scalar('select leave_balance from public.hr_employees where id=$1', [employee])), 7);
       await as(ids.employee);
       await scalar("select public.hr_request_leave($1,'2027-03-01','2027-03-05','Replacement request')", [employee]);
+    });
+    await t.test('HR can demote and revoke company members while retaining employee and leave records', async () => {
+      const manage = 'select public.hr_manage_member($1,$2,$3,$4)';
+      await as(ids.employee);
+      await assert.rejects(db.query(manage, [org, ids.manager, 'manager', 'hr']), /HR access required/);
+      await as(ids.outsider);
+      await assert.rejects(db.query(manage, [org, ids.manager, 'manager', null]), /HR access required/);
+      await as(ids.hr);
+      await assert.rejects(db.query(manage, [org, ids.hr, 'hr', null]), /protected/);
+      await assert.rejects(db.query(manage, [org, ids.manager, 'employee', null]), /access changed/);
+      await db.query(manage, [org, ids.manager, 'manager', 'employee']);
+      assert.equal(await scalar('select manager_user_id from public.hr_employees where id=$1', [employee]), null);
+      await as(ids.manager);
+      assert.equal((await db.query('select * from public.hr_employees')).rows.length, 0);
+      await as(ids.hr);
+      await db.query(manage, [org, ids.employee, 'employee', null]);
+      assert.equal(await scalar('select user_id from public.hr_employees where id=$1', [employee]), null);
+      assert.equal(await scalar('select status from public.hr_leave_requests where id=$1', [request!]), 'Approved');
+      assert.equal(Number(await scalar("select count(*) from public.hr_audit_events where action in ('member.role_changed.employee','member.revoked')")), 2);
+      await as(ids.employee);
+      assert.equal((await db.query('select * from public.hr_organizations')).rows.length, 0);
+      assert.equal((await db.query('select * from public.hr_leave_requests')).rows.length, 0);
     });
     await t.test('anonymous sessions cannot read tables or execute write functions', async () => {
       await db.exec('reset role; set role anon');

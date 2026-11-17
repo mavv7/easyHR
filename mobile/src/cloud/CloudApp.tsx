@@ -4,7 +4,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, supabase } from './client';
-import { CloudEmployee, emptySnapshot, loadOrganizations, loadSnapshot, Organization, rpc, Snapshot } from './api';
+import { CloudEmployee, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
 import { weekdays } from '../domain';
 
 function Button({ label, onPress, disabled = false, secondary = false }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean }) {
@@ -121,7 +121,16 @@ function CompanyWorkspace({ session }: { session: Session }) {
         {snapshot.leave.map(l => { const e = snapshot.employees.find(e => e.id === l.employee_id); const canApprove = e?.user_id !== session.user.id && (isHR || (membership?.role === 'manager' && e?.manager_user_id === session.user.id)); return <View key={l.id} style={s.card}><Text style={s.heading}>{e?.name || 'Employee'}</Text><Text style={s.subtitle}>{l.start_date} → {l.end_date} · {l.days} days</Text><Text>{l.reason}</Text><Text style={s.label}>{l.status}</Text>{l.status === 'Pending' && canApprove && <View style={s.row}><Button label="Approve" disabled={busy} onPress={() => void act(() => rpc('hr_decide_leave', { p_id: l.id, p_approve: true }), 'Leave approved and balance updated')} /><Button label="Decline" disabled={busy} secondary onPress={() => void act(() => rpc('hr_decide_leave', { p_id: l.id, p_approve: false }), 'Leave declined')} /></View>}</View>; })}
       </View>}
       {tab === 'Activity' && isHR && <View style={s.card}><Text style={s.heading}>Server activity history</Text><Text style={s.small}>Latest 100 events. Events are written by database functions and cannot be edited by app users.</Text>{snapshot.audit.map(a => <View key={a.id} style={s.listItem}><View><Text style={s.label}>{a.action}</Text><Text style={s.small}>{new Date(a.created_at).toLocaleString()}</Text><Text selectable style={s.small}>Actor: {a.actor_id}</Text><Text selectable style={s.small}>Record: {a.record_id}</Text></View></View>)}</View>}
-      {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(m => <View key={m.user_id} style={s.listItem}><View><Text style={s.label}>{snapshot.employees.find(e => e.user_id === m.user_id)?.name || (m.user_id === session.user.id ? session.user.email : 'Unlinked account')}</Text><Text style={s.small}>{m.role} · {m.user_id}</Text></View></View>)}</View>}
+      {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(member => <MemberAccess
+        key={`${org}:${member.user_id}:${member.role}`}
+        member={member}
+        name={snapshot.employees.find(e => e.user_id === member.user_id)?.name || (member.user_id === session.user.id ? session.user.email : member.user_id)}
+        protectedAccess={member.user_id === session.user.id || member.user_id === organizations.find(o => o.id === org)?.owner_id}
+        busy={busy}
+        onSave={role => act(() => rpc('hr_manage_member', {
+          p_organization_id: org, p_user_id: member.user_id, p_expected_role: member.role, p_role: role,
+        }), role ? 'Workspace role updated' : 'Workspace access revoked')}
+      />)}</View>}
     </>}
     <Text style={s.small}>Connected MVP: employee records and leave. Payroll, contracts, attendance and compliance remain in the separate fictional demo.</Text>
   </ScrollView>;
@@ -141,6 +150,33 @@ function LeaveForm({ employees, busy, onCancel, onSave }: SaveForm & { employees
   function save() { try { weekdays(start, end); if (!employee || !reason.trim()) throw Error('Choose an employee and enter a reason.'); void onSave({ p_employee_id: employee, p_start: start, p_end: end, p_reason: reason }); } catch (err) { setError((err as Error).message); } }
   return <View style={s.form}><Text style={s.heading}>New leave request</Text><View style={s.row}>{employees.map(e => <Button key={e.id} label={e.name} secondary={employee !== e.id} onPress={() => setEmployee(e.id)} />)}</View><Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} /><Field label="End date (YYYY-MM-DD)" value={end} onChange={setEnd} /><Field label="Reason" value={reason} onChange={setReason} />{!!error && <Text style={s.error}>{error}</Text>}<View style={s.row}><Button label="Submit request" disabled={busy} onPress={save} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
 }
+function MemberAccess({ member, name, protectedAccess, busy, onSave }: {
+  member: Member;
+  name?: string;
+  protectedAccess: boolean;
+  busy: boolean;
+  onSave: (role: Member['role'] | null) => Promise<boolean>;
+}) {
+  const [choice, setChoice] = useState<Member['role'] | null | undefined>(undefined);
+  const roles: Member['role'][] = ['employee', 'manager', 'hr'];
+  return <View style={s.form}>
+    <Text style={s.label}>{name}</Text>
+    <Text style={s.small}>{member.role.toUpperCase()}{protectedAccess ? ' · Protected access' : ''}</Text>
+    {!protectedAccess && choice === undefined && <View style={s.row}>
+      {roles.filter(role => role !== member.role).map(role => <Button key={role} label={`Set ${role.toUpperCase()}`} disabled={busy} secondary onPress={() => setChoice(role)} />)}
+      <Button label="Revoke access" disabled={busy} secondary onPress={() => setChoice(null)} />
+    </View>}
+    {!protectedAccess && choice !== undefined && <>
+      <Text style={s.small}>{choice === null ? 'Revoke workspace access and unlink the employee record?' : `Change this member’s role to ${choice.toUpperCase()}?`}</Text>
+      {member.role !== 'employee' && (choice === null || choice === 'employee') && <Text style={s.small}>This also clears their manager assignments.</Text>}
+      <View style={s.row}>
+        <Button label={choice === null ? 'Confirm revocation' : 'Save role'} disabled={busy} onPress={async () => { if (await onSave(choice)) setChoice(undefined); }} />
+        <Button label="Cancel" disabled={busy} secondary onPress={() => setChoice(undefined)} />
+      </View>
+    </>}
+  </View>;
+}
+
 function AccessForm({ employees, busy, onCancel, onSave }: SaveForm & { employees: CloudEmployee[] }) {
   const [email, setEmail] = useState(''), [role, setRole] = useState('employee'), [employee, setEmployee] = useState<string | null>(null);
   return <View style={s.form}><Field label="Work email" value={email} onChange={setEmail} /><Text style={s.label}>Role</Text><View style={s.row}>{['employee', 'manager', 'hr'].map(r => <Button key={r} label={r.toUpperCase()} secondary={role !== r} onPress={() => setRole(r)} />)}</View><Text style={s.label}>Link employee record (matching email required)</Text><View style={s.row}><Button label="No employee record" secondary={employee !== null} onPress={() => setEmployee(null)} />{employees.filter(e => !e.user_id).map(e => <Button key={e.id} label={e.name} secondary={employee !== e.id} onPress={() => { setEmployee(e.id); setEmail(e.email); }} />)}</View><Text style={s.small}>HR can manage all records and company access. Managers see their assigned reports. Employees see only their own record and leave.</Text><View style={s.row}><Button label="Grant access" disabled={busy || !email.trim()} onPress={() => void onSave({ p_email: email.trim(), p_role: role, p_employee_id: employee })} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;

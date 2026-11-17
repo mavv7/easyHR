@@ -46,7 +46,8 @@ The database test applies the actual migration to PGlite (PostgreSQL in WASM), w
 ## Before a real-team pilot
 
 - Review RLS in Supabase and run the acceptance flow with at least two organizations and HR, manager and employee accounts.
-- Add membership revocation/role-change administration, password recovery, MFA and account lifecycle handling; the current UI only grants access and links records.
+- Verify role changes and revocation under Workspace. HR can manage other members, with the workspace owner and the signed-in administrator protected. Revocation preserves employee and leave records, clears linked access and manager assignments, and records an audit event.
+- Add password recovery, MFA and account lifecycle handling.
 - Confirm backup/PITR availability for your Supabase plan and perform a restore drill. Backups are a project configuration requirement, not something this migration enables.
 - Configure email delivery, rate limits, monitoring and data retention. Validate privacy/consent policies and employee access with the organization.
 - Leave currently excludes weekends only. Zambia public holidays, partial days, leave types, accruals, cancellations and statutory rules remain follow-on work.
