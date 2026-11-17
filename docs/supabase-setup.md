@@ -67,7 +67,7 @@ The database test applies the actual migration to PGlite (PostgreSQL in WASM), w
 - HR can withdraw pending authorizations under Workspace. If the employee has already activated access, HR can revoke it from the active member list.
 - Leave currently excludes weekends only. Zambia public holidays, partial days, leave types, accruals and statutory rules remain follow-on work.
 - Payroll, contracts, compliance and attendance are still demo-only; document uploads and salary data are not part of these new tables.
-- Pagination and large-company performance need additional work before exceeding the hosted API row cap (typically 1,000 records per query).
+- Workspace reads page through organizations, employees, leave requests, members and pending authorizations. The app still renders full workspace lists, so measure refresh and rendering times with representative large-company data.
 - Produce a development/internal build with the SecureStore config plugin, then verify signed Android/iOS behavior on physical devices. No hosted migration, backup configuration or signed build is implied by local checks passing.
 
 ## Sources
