@@ -19,6 +19,14 @@ The connected MVP implements accounts, organization membership, employee records
 5. As HR, refresh and approve the request. The request and employee balance update atomically. Refresh the employee app to see the outcome. Data also refreshes on foreground and every 30 seconds while active; this is polling, not Supabase Realtime.
 6. For manager approval, grant a verified account Manager access, then edit the employee and assign that manager. Managers see only their own record and assigned reports. Nobody can approve their own leave.
 
+## Contracts and payroll drafts
+
+In **Contracts**, HR can record an employee’s contract title, start and optional end dates, and mark the agreement internally reviewed. Edits return the record to review. Contract documents and signatures are handled separately.
+
+In **Payroll**, HR opens a month and enters base and additional gross pay for each employee in ZMW. The total is draft gross pay from entered amounts. Tax, statutory contributions, deductions, net pay, payslips and payments are outside this workflow.
+
+Both modules require migration `202611180005_contracts_payroll.sql`. Only HR members of the company can access these records. Audit events record who changed each record and when, with salary values kept in the payroll table.
+
 ## Password recovery
 
 In Supabase Authentication, edit the **Reset Password** email template so it includes the one-time code. For example, use the subject `Reset your easyHR password` and this body:
@@ -66,7 +74,7 @@ The database test applies the actual migration to PGlite (PostgreSQL in WASM), w
 - Employees and HR can cancel pending leave, which releases reserved days and permits a replacement request for the same dates. Approved leave stays in the history with its balance deduction.
 - HR can withdraw pending authorizations under Workspace. If the employee has already activated access, HR can revoke it from the active member list.
 - Leave currently excludes weekends only. Zambia public holidays, partial days, leave types, accruals and statutory rules remain follow-on work.
-- Payroll, contracts, compliance and attendance are still demo-only; document uploads and salary data are not part of these new tables.
+- Compliance and attendance are still demo-only. Connected Contracts tracks metadata and internal review. Connected Payroll prepares draft gross pay.
 - Workspace reads page through organizations, employees, leave requests, members and pending authorizations. The app still renders full workspace lists, so measure refresh and rendering times with representative large-company data.
 - Produce a development/internal build with the SecureStore config plugin, then verify signed Android/iOS behavior on physical devices. No hosted migration, backup configuration or signed build is implied by local checks passing.
 

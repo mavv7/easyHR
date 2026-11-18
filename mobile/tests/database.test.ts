@@ -17,6 +17,7 @@ test('database isolation, authorization and atomic leave workflow', async t => {
     await db.exec(await readFile(new URL('../supabase/migrations/202611180002_company_signup.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180003_manage_members.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180004_pending_requests.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/202611180005_contracts_payroll.sql', import.meta.url), 'utf8'));
     for (const [id, name, company] of [[ids.hr, 'hr', 'Mango Studio'], [ids.outsider, 'outsider', 'Other company']]) {
       await db.query('insert into auth.users values ($1, $2, null, $3)', [id, name + '@example.com', { company_name: company }]);
     }
@@ -154,6 +155,34 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await db.exec('reset role');
       await assert.rejects(db.query("insert into auth.users values(gen_random_uuid(), $1, null, '{}')", [email]), /approval required/);
     });
+    await t.test('contracts and payroll drafts are company-scoped, HR-only, audited and versioned', async () => {
+      const contract = 'select public.hr_save_contract($1,$2,$3,$4,$5,$6,$7)';
+      const draft = 'select public.hr_save_payroll_draft($1,$2,$3,$4,$5,$6)';
+      await as(ids.hr);
+      await db.query(contract, [org, employee, 'Employment agreement', '2027-01-01', null, null, null]);
+      const id = await scalar('select id from public.hr_contracts');
+      await db.query('select public.hr_review_contract($1,$2,1)', [org, id]);
+      await assert.rejects(db.query('select public.hr_review_contract($1,$2,1)', [org, id]), /Contract changed/);
+      await db.query(contract, [org, employee, 'Updated agreement', '2027-01-01', '2027-12-31', id, 2]);
+      assert.equal(await scalar('select reviewed_at from public.hr_contracts'), null);
+      await db.query(draft, [org, employee, '2027-01-01', 900000, 12345, null]);
+      await assert.rejects(db.query(draft, [org, employee, '2027-01-01', 0, 0, null]), /Payroll draft changed/);
+      await db.query(draft, [org, employee, '2027-01-01', 910000, 12345, 1]);
+      await assert.rejects(db.query(draft, [org, employee, '2027-01-01', 0, 0, 1]), /Payroll draft changed/);
+      assert.equal(Number(await scalar('select base_minor + additional_minor from public.hr_payroll_drafts')), 922345);
+      assert.equal(Number(await scalar("select count(*) from public.hr_audit_events where action like 'contract.%' or action = 'payroll.draft_saved'")), 5);
+      await assert.rejects(db.query('update public.hr_payroll_drafts set base_minor = 0'));
+      for (const user of [ids.employee, ids.manager, ids.outsider]) {
+        await as(user);
+        assert.equal((await db.query('select * from public.hr_contracts')).rows.length, 0);
+        assert.equal((await db.query('select * from public.hr_payroll_drafts')).rows.length, 0);
+        await assert.rejects(db.query(contract, [org, employee, 'Changed', '2027-01-01', null, id, 3]), /HR access required/);
+        await assert.rejects(db.query(draft, [org, employee, '2027-01-01', 0, 0, 2]), /HR access required/);
+      }
+      const otherOrg = await scalar('select id from public.hr_organizations');
+      await assert.rejects(db.query(draft, [otherOrg, employee, '2027-01-01', 0, 0, null]), /foreign key/);
+      await assert.rejects(db.query(contract, [otherOrg, employee, 'Wrong company', '2027-01-01', null, null, null]), /foreign key/);
+    });
     await t.test('HR can demote and revoke company members while retaining employee and leave records', async () => {
       const manage = 'select public.hr_manage_member($1,$2,$3,$4)';
       await as(ids.employee);
@@ -182,6 +211,8 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await assert.rejects(db.query('select public.hr_activate_workspace()'));
       await assert.rejects(db.query('select public.hr_cancel_leave(null)'));
       await assert.rejects(db.query('select public.hr_list_invitations(null)'));
+      await assert.rejects(db.query('select * from public.hr_payroll_drafts'));
+      await assert.rejects(db.query('select * from public.hr_contracts'));
     });
   } finally { await db.close(); }
 });

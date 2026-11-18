@@ -59,6 +59,7 @@ try {
       '202611180002_company_signup.sql',
       '202611180003_manage_members.sql',
       '202611180004_pending_requests.sql',
+      '202611180005_contracts_payroll.sql',
     ]) {
       const version = file.split('_')[0];
       const migration = await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8');
@@ -94,13 +95,13 @@ try {
     from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relkind='r' and c.relname like 'hr_%' order by c.relname`);
   console.log(JSON.stringify(security.rows, null, 2));
-  if (security.rows.length !== 5 || security.rows.some(r => !r.rls || r.anon_select || r.direct_write || !r.policies)) throw new Error('Schema/access verification failed.');
+  if (security.rows.length !== 7 || security.rows.some(r => !r.rls || r.anon_select || r.direct_write || !r.policies)) throw new Error('Schema/access verification failed.');
   const functions = await client.query(`select p.proname, p.prosecdef,
     has_function_privilege('anon',p.oid,'EXECUTE') as anon_execute,
     has_function_privilege('authenticated',p.oid,'EXECUTE') as authenticated_execute
     from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'hr_%'`);
-  if (functions.rows.length !== 9 || functions.rows.some(f => !f.prosecdef || f.anon_execute || !f.authenticated_execute)) throw new Error('RPC permissions verification failed.');
-  console.log('Verified all five tables and all nine authorized RPC functions.');
+  if (functions.rows.length !== 12 || functions.rows.some(f => !f.prosecdef || f.anon_execute || !f.authenticated_execute)) throw new Error('RPC permissions verification failed.');
+  console.log('Verified all seven tables and all twelve authorized RPC functions.');
   if (process.argv.includes('--verify-workflow')) await verifyLiveWorkflow(client);
 } catch (error) {
   await client.query('rollback').catch(() => {});

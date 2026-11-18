@@ -6,6 +6,8 @@ export type CloudEmployee = { id: string; organization_id: string; user_id: stri
 export type CloudLeave = { id: string; employee_id: string; created_at: string; start_date: string; end_date: string; days: number; reason: string; status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled' };
 export type Audit = { id: number; action: string; created_at: string; actor_id: string; record_id: string | null };
 export type Invitation = { email: string; role: Member['role']; employee_id: string | null };
+export type Contract = { id: string; employee_id: string; title: string; start_date: string; end_date: string | null; reviewed_at: string | null; version: number };
+export type PayrollDraft = { id: string; employee_id: string; base_minor: number; additional_minor: number; version: number };
 export type Snapshot = { employees: CloudEmployee[]; leave: CloudLeave[]; members: Member[]; audit: Audit[]; invitations: Invitation[] | null };
 export const emptySnapshot: Snapshot = { employees: [], leave: [], members: [], audit: [], invitations: null };
 
@@ -39,6 +41,16 @@ export async function loadAuditPage(org: string, before?: Pick<Audit, 'created_a
   const { data, error } = await query;
   if (error) throw error;
   return data ?? [];
+}
+
+export function loadContracts(org: string) {
+  return readRows<Contract, 'id'>(() => supabase!.from('hr_contracts').select('id,employee_id,title,start_date,end_date,reviewed_at,version')
+    .eq('organization_id', org), 'id');
+}
+
+export function loadPayrollDrafts(org: string, period: string) {
+  return readRows<PayrollDraft, 'id'>(() => supabase!.from('hr_payroll_drafts').select('id,employee_id,base_minor,additional_minor,version')
+    .eq('organization_id', org).eq('period', period), 'id');
 }
 
 export async function loadSnapshot(org: string, userId: string): Promise<Snapshot> {

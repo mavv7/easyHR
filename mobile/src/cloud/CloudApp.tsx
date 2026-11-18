@@ -5,8 +5,8 @@ import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth, isDateKey, monthlyAgenda } from './leaveCalendar';
-import { Audit, CloudEmployee, CloudLeave, emptySnapshot, loadAuditPage, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
-import { weekdays } from '../domain';
+import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadContracts, loadOrganizations, loadPayrollDrafts, loadSnapshot, Member, Organization, PayrollDraft, rpc, Snapshot } from './api';
+import { money, weekdays } from '../domain';
 
 function Button({ label, onPress, disabled = false, secondary = false, selected }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean }) {
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress} style={[s.button, secondary && s.secondary, disabled && { opacity: 0.45 }]}><Text style={[s.buttonText, secondary && { color: '#24352C' }]}>{label}</Text></Pressable>;
@@ -193,7 +193,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
   const params = useLocalSearchParams<{ cloudtab?: string }>();
   const membership = snapshot.members.find(m => m.user_id === session.user.id), isHR = membership?.role === 'hr';
-  const tabs = ['Overview', 'People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Activity', 'Workspace'] : [])];
+  const tabs = ['Overview', 'People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Contracts', 'Payroll', 'Activity', 'Workspace'] : [])];
   const tab = tabs.find(name => name === params.cloudtab) ?? 'People';
   const refresh = useCallback(async () => {
     const ticket = ++generation.current;
@@ -387,6 +387,8 @@ function CompanyWorkspace({ session }: { session: Session }) {
         })}
       </View>}
       {tab === 'Calendar' && <LeaveCalendar key={org} requests={snapshot.leave} employees={employeesById} />}
+      {tab === 'Contracts' && isHR && <ContractsRegister key={org} org={org} employees={snapshot.employees} />}
+      {tab === 'Payroll' && isHR && <PayrollRegister key={org} org={org} employees={snapshot.employees} />}
       {tab === 'Activity' && isHR && <ActivityHistory key={org} org={org} snapshot={snapshot} employees={employeesById} user={session.user} />}
       {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(member => <MemberAccess
         key={`${org}:${member.user_id}:${member.role}`}
@@ -411,7 +413,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
         </View>)}
       </View>}
     </>}
-    <Text style={s.small}>Connected MVP: employee records and leave. Payroll, contracts, attendance and compliance remain in the separate fictional demo.</Text>
+    <Text style={s.small}>Attendance and compliance are available in the fictional demo.</Text>
   </ScrollView>;
 }
 type SaveForm = { busy: boolean; onCancel: () => void; onSave: (values: Record<string, unknown>) => Promise<void> };
@@ -440,6 +442,10 @@ const activityLabels: Record<string, string> = {
   'member.role_changed.employee': 'Role changed to employee',
   'member.revoked': 'Workspace access revoked',
   'invitation.cancelled': 'Pending authorization withdrawn',
+  'contract.created': 'Contract recorded',
+  'contract.updated': 'Contract updated',
+  'contract.reviewed': 'Contract reviewed',
+  'payroll.draft_saved': 'Payroll draft saved',
 };
 
 const activityCategories = [
@@ -448,6 +454,8 @@ const activityCategories = [
   { label: 'Leave', prefixes: ['leave.'] },
   { label: 'Access', prefixes: ['member.', 'invitation.'] },
   { label: 'Company', prefixes: ['organization.'] },
+  { label: 'Contracts', prefixes: ['contract.'] },
+  { label: 'Payroll', prefixes: ['payroll.'] },
 ];
 
 function ActivityHistory({ org, snapshot, employees, user }: {
@@ -530,6 +538,180 @@ function ActivityHistory({ org, snapshot, employees, user }: {
     {!!loadedEvents.length && (atEnd
       ? <Text style={s.small}>You’ve reached the oldest event.</Text>
       : <Button label={loadingOlder ? 'Loading older events…' : 'Load older events'} secondary disabled={loadingOlder} onPress={() => void loadOlder()} />)}
+  </View>;
+}
+
+function useHrRegister<T>(load: () => Promise<T[]>) {
+  const [records, setRecords] = useState<T[] | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const writing = useRef(false);
+  useEffect(() => {
+    let active = true;
+    load().then(data => { if (active) setRecords(data); }).catch((err: { code?: string; message?: string }) => {
+      if (active) {
+        setRecords(null);
+        setError(err.code === 'PGRST205' || err.code === '42P01'
+          ? 'This workspace needs the Contracts and Payroll database migration.'
+          : err.message || 'Could not load records.');
+      }
+    });
+    return () => { active = false; };
+  }, [load, revision]);
+  function reload() {
+    setError('');
+    setRecords(null);
+    setRevision(value => value + 1);
+  }
+  async function save(work: () => Promise<unknown>) {
+    if (writing.current) return false;
+    writing.current = true;
+    setBusy(true);
+    setError('');
+    try { await work(); reload(); return true; }
+    catch (err) { setError((err as Error).message); return false; }
+    finally { writing.current = false; setBusy(false); }
+  }
+  return { records, error, busy, reload, save };
+}
+
+function ContractsRegister({ org, employees }: { org: string; employees: CloudEmployee[] }) {
+  const load = useCallback(() => loadContracts(org), [org]);
+  const { records, error, busy, reload, save } = useHrRegister(load);
+  const [editor, setEditor] = useState<Contract | 'new' | null>(null);
+  const names = new Map(employees.map(employee => [employee.id, employee.name]));
+  return <View style={s.card}>
+    <Text style={s.heading}>Contract register</Text>
+    <Text style={s.small}>Track contract dates and internal review.</Text>
+    <View style={s.row}>
+      <Button label="Refresh contracts" secondary disabled={busy} onPress={reload} />
+      <Button label="Add contract" disabled={busy || !records || !employees.length} onPress={() => setEditor('new')} />
+    </View>
+    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    {!records && !error && <Text style={s.subtitle}>Loading contracts…</Text>}
+    {records?.length === 0 && <Text style={s.subtitle}>No contracts recorded yet.</Text>}
+    {editor && <ContractForm key={editor === 'new' ? 'new' : editor.id} contract={editor === 'new' ? null : editor}
+      employees={employees} busy={busy} onCancel={() => setEditor(null)} onSave={async values => {
+        if (await save(() => rpc('hr_save_contract', { p_org: org, ...values }))) setEditor(null);
+      }} />}
+    {[...(records ?? [])].sort((a, b) => b.start_date.localeCompare(a.start_date)).map(contract => <View key={contract.id} style={s.form}>
+      <Text style={s.label}>{contract.title}</Text>
+      <Text style={s.subtitle}>{names.get(contract.employee_id) ?? 'Employee'} · {contract.start_date}{contract.end_date ? ` to ${contract.end_date}` : ''}</Text>
+      <Text style={s.small}>{contract.reviewed_at ? `Internally reviewed ${new Date(contract.reviewed_at).toLocaleDateString()}` : 'Needs internal review'}</Text>
+      <View style={s.row}>
+        <Button label="Edit" secondary disabled={busy || (editor !== 'new' && editor?.id === contract.id)} onPress={() => setEditor(contract)} />
+        {!contract.reviewed_at && <Button label="Mark reviewed" disabled={busy} onPress={() => void save(() => rpc('hr_review_contract', { p_org: org, p_id: contract.id, p_version: contract.version }))} />}
+      </View>
+    </View>)}
+  </View>;
+}
+
+function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm & { contract: Contract | null; employees: CloudEmployee[] }) {
+  const [employee, setEmployee] = useState(contract?.employee_id ?? employees[0]?.id ?? '');
+  const [title, setTitle] = useState(contract?.title ?? '');
+  const [start, setStart] = useState(contract?.start_date ?? '');
+  const [end, setEnd] = useState(contract?.end_date ?? '');
+  const [error, setError] = useState('');
+  function submit() {
+    const name = title.trim(), from = start.trim(), through = end.trim();
+    const length = Array.from(name).length;
+    if (!employee || length < 2 || length > 120 || !isDateKey(from) || (through && (!isDateKey(through) || through < from))) {
+      setError('Choose an employee, enter a title of 2 to 120 characters, and check the contract dates.');
+      return;
+    }
+    setError('');
+    void onSave({ p_employee: employee, p_title: name, p_start: from, p_end: through || null, p_id: contract?.id ?? null, p_version: contract?.version ?? null });
+  }
+  return <View style={s.form}>
+    <Text style={s.heading}>{contract ? 'Edit contract' : 'New contract'}</Text>
+    {!contract && <View style={s.row}>{employees.map(entry => <Button key={entry.id} label={entry.name}
+      selected={employee === entry.id} secondary={employee !== entry.id} disabled={busy} onPress={() => setEmployee(entry.id)} />)}</View>}
+    <Field label="Contract title" value={title} onChange={setTitle} />
+    <Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} />
+    <Field label="End date (optional, YYYY-MM-DD)" value={end} onChange={setEnd} />
+    {contract?.reviewed_at && <Text style={s.small}>Saving changes returns the contract to internal review.</Text>}
+    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    <View style={s.row}><Button label="Save contract" disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
+  </View>;
+}
+
+function PayrollRegister({ org, employees }: { org: string; employees: CloudEmployee[] }) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Lusaka', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
+  const [period, setPeriod] = useState(['year', 'month'].map(type => parts.find(part => part.type === type)?.value).join('-'));
+  const [periodInput, setPeriodInput] = useState(period);
+  const [error, setError] = useState('');
+  function openPeriod() {
+    const month = periodInput.trim();
+    if (!isDateKey(`${month}-01`)) { setError('Enter a month in YYYY-MM format.'); return; }
+    setError('');
+    setPeriod(month);
+  }
+  return <View style={s.card}>
+    <Text style={s.heading}>Payroll drafts</Text>
+    <Text style={s.small}>Enter monthly gross amounts in ZMW for review before processing payroll.</Text>
+    <Field label="Payroll month (YYYY-MM)" value={periodInput} onChange={setPeriodInput} />
+    <Button label="Open month" secondary onPress={openPeriod} />
+    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    <PayrollMonth key={period} org={org} period={period} employees={employees} />
+  </View>;
+}
+
+function PayrollMonth({ org, period, employees }: { org: string; period: string; employees: CloudEmployee[] }) {
+  const load = useCallback(() => loadPayrollDrafts(org, `${period}-01`), [org, period]);
+  const { records, error, busy, reload, save } = useHrRegister(load);
+  const [selected, setSelected] = useState<{ employeeId: string; draft?: PayrollDraft } | null>(null);
+  const drafts = new Map(records?.map(draft => [draft.employee_id, draft]));
+  const editor = employees.find(employee => employee.id === selected?.employeeId);
+  const gross = records?.reduce((total, draft) => total + draft.base_minor + draft.additional_minor, 0) ?? 0;
+  return <>
+    <View style={s.row}><Text style={s.heading}>{period}</Text><Button label="Refresh drafts" secondary disabled={busy} onPress={reload} /></View>
+    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    {!records && !error && <Text style={s.subtitle}>Loading payroll drafts…</Text>}
+    {records && <Text style={s.label}>{money(gross)} draft gross total · {records.length} of {employees.length} employees entered</Text>}
+    {editor && selected && <PayrollForm key={editor.id} employee={editor} draft={selected.draft} busy={busy} onCancel={() => setSelected(null)}
+      onSave={async values => {
+        if (await save(() => rpc('hr_save_payroll_draft', { p_org: org, p_period: `${period}-01`, ...values }))) setSelected(null);
+      }} />}
+    {records && employees.map(employee => {
+      const draft = drafts.get(employee.id);
+      return <View key={employee.id} style={s.listItem}>
+        <View style={{ flex: 1 }}><Text style={s.label}>{employee.name}</Text>
+          <Text style={s.subtitle}>{draft ? money(draft.base_minor + draft.additional_minor) : 'Draft needed'}</Text>
+        </View>
+        <Button label={draft ? 'Edit draft' : 'Add draft'} secondary disabled={busy || selected?.employeeId === employee.id} onPress={() => setSelected({ employeeId: employee.id, draft })} />
+      </View>;
+    })}
+  </>;
+}
+
+function parsePayrollAmount(value: string) {
+  const match = /^(\d{1,8})(?:\.(\d{1,2}))?$/.exec(value.trim());
+  if (!match) return null;
+  const minor = Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'));
+  return minor <= 1_000_000_000 ? minor : null;
+}
+
+function PayrollForm({ employee, draft, busy, onCancel, onSave }: SaveForm & { employee: CloudEmployee; draft?: PayrollDraft }) {
+  const [base, setBase] = useState(draft ? (draft.base_minor / 100).toFixed(2) : '');
+  const [additional, setAdditional] = useState(draft ? (draft.additional_minor / 100).toFixed(2) : '0');
+  const [error, setError] = useState('');
+  const baseMinor = parsePayrollAmount(base), additionalMinor = parsePayrollAmount(additional);
+  function submit() {
+    if (baseMinor === null || additionalMinor === null) {
+      setError('Enter amounts from 0 to 10,000,000 ZMW with up to two decimal places.');
+      return;
+    }
+    setError('');
+    void onSave({ p_employee: employee.id, p_base: baseMinor, p_additional: additionalMinor, p_version: draft?.version ?? null });
+  }
+  return <View style={s.form}>
+    <Text style={s.heading}>{employee.name}</Text>
+    <Field label="Base pay (ZMW)" value={base} onChange={setBase} />
+    <Field label="Additional gross pay (ZMW)" value={additional} onChange={setAdditional} />
+    {baseMinor !== null && additionalMinor !== null && <Text style={s.label}>{money(baseMinor + additionalMinor)} draft gross pay</Text>}
+    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    <View style={s.row}><Button label="Save draft" disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
   </View>;
 }
 
