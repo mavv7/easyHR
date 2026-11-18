@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppState, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -7,14 +7,31 @@ import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth, isDateKey, monthlyAgenda } from './leaveCalendar';
 import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadContracts, loadOrganizations, loadPayrollDrafts, loadSnapshot, Member, Organization, PayrollDraft, rpc, Snapshot } from './api';
 import { money, weekdays } from '../domain';
+import { AuthCover, Brand, colors, Rings, s, WorkspaceNav } from './workspaceDesign';
 
 function Button({ label, onPress, disabled = false, secondary = false, selected }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean }) {
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress} style={[s.button, secondary && s.secondary, disabled && { opacity: 0.45 }]}><Text style={[s.buttonText, secondary && { color: '#24352C' }]}>{label}</Text></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress}
+    style={({ pressed }) => [s.button, secondary && s.secondary, selected && s.filterSelected, disabled && s.disabled, pressed && s.pressed]}>
+    <Text style={[s.buttonText, secondary && s.secondaryText, selected && s.filterText]}>{label}</Text>
+  </Pressable>;
 }
 function Field({ label, value, onChange, secure = false }: { label: string; value: string; onChange: (v: string) => void; secure?: boolean }) {
-  return <View style={{ gap: 6 }}><Text style={s.label}>{label}</Text><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} secureTextEntry={secure} autoCapitalize="none" autoCorrect={false} style={s.input} /></View>;
+  const [focused, setFocused] = useState(false);
+  return <View style={{ gap: 6 }}>
+    <Text style={s.label}>{label}</Text>
+    <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} secureTextEntry={secure}
+      autoCapitalize="none" autoCorrect={false} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      selectionColor={colors.sage} style={[s.input, focused && s.inputFocused]} />
+  </View>;
+}
+
+function StatusPill({ label, tone = 'positive' }: { label: string; tone?: 'positive' | 'pending' | 'neutral' }) {
+  return <View style={[s.badge, tone === 'pending' && s.badgePending, tone === 'neutral' && s.badgeNeutral]}>
+    <Text style={[s.badgeText, tone === 'pending' && s.badgePendingText]}>{label}</Text>
+  </View>;
 }
 export default function CloudApp({ onDemo }: { onDemo: () => void }) {
+  const wide = useWindowDimensions().width >= 860;
   const [session, setSession] = useState<Session | null>(null), [loading, setLoading] = useState(configured), [error, setError] = useState('');
   useEffect(() => {
     if (!supabase) return;
@@ -26,11 +43,15 @@ export default function CloudApp({ onDemo }: { onDemo: () => void }) {
     return () => { live = false; subscription.unsubscribe(); foreground.remove(); supabase!.auth.stopAutoRefresh(); };
   }, []);
   return <SafeAreaProvider><SafeAreaView style={s.root}><KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-    {loading ? <Text style={s.loading}>Opening your workspace…</Text> : session ? <CompanyWorkspace key={session.user.id} session={session} /> : <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.auth}>
-      <Text style={s.logo}>easy<Text style={{ color: '#ED631C' }}>HR.</Text></Text><Text style={s.title}>Your people, connected.</Text><Text style={s.subtitle}>Secure company workspaces · Zambia</Text>
-      {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-      {configured ? <SignIn /> : <View style={s.card}><Text style={s.heading}>Connect your Supabase project</Text><Text style={s.subtitle}>Add your project URL and publishable key to mobile/.env.local, apply the database migration, then restart Expo. Setup steps are in docs/supabase-setup.md.</Text></View>}
-      <Button label="Explore fictional demo" onPress={onDemo} secondary />
+    {loading ? <Text style={s.loading}>Opening your workspace…</Text> : session ? <CompanyWorkspace key={session.user.id} session={session} wide={wide} /> : <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.auth}>
+      <View style={[s.authShell, wide && s.authWide]}>
+        <AuthCover wide={wide} />
+        <View style={[s.authForm, wide && s.authFormWide]}>
+          {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+          {configured ? <SignIn /> : <View style={s.card}><Text style={s.heading}>Connect your Supabase project</Text><Text style={s.subtitle}>Add your project URL and publishable key to mobile/.env.local, apply the database migration, then restart Expo. Setup steps are in docs/supabase-setup.md.</Text></View>}
+          <View style={s.row}><Button label="Explore fictional demo" onPress={onDemo} secondary /></View>
+        </View>
+      </View>
     </ScrollView>}
   </KeyboardAvoidingView></SafeAreaView></SafeAreaProvider>;
 }
@@ -64,19 +85,19 @@ function SignIn() {
     setMessage(notice);
   }} />;
 
-  return <View style={s.card}>
-    <Text style={s.heading}>{mode === 'company' ? 'Register your company' : mode === 'member' ? 'Activate company access' : 'Sign in to easyHR'}</Text>
+  return <View style={{ gap: 15 }}>
+    <Text accessibilityRole="header" style={s.title}>{mode === 'company' ? 'Register your company' : mode === 'member' ? 'Activate company access' : 'Sign in'}</Text>
     {mode === 'company' && <Field label="Company name" value={company} onChange={setCompany} />}
     {mode === 'member' && <Text style={s.subtitle}>Use the work email your HR administrator authorized.</Text>}
     <Field label="Work email" value={email} onChange={setEmail} />
     <Field label="Password" value={password} onChange={setPassword} secure />
     {!!message && <Text accessibilityRole="alert" style={s.subtitle}>{message}</Text>}
     <Button label={busy ? 'Please wait…' : mode === 'company' ? 'Register company' : mode === 'member' ? 'Activate access' : 'Sign in'} disabled={busy} onPress={() => void authenticate()} />
-    {mode === 'signin' ? <>
+    {mode === 'signin' ? <View style={s.row}>
       <Button label="Register a company" disabled={busy} onPress={() => { setMode('company'); setMessage(''); }} secondary />
       <Button label="Activate HR-approved access" disabled={busy} onPress={() => { setMode('member'); setMessage(''); }} secondary />
       <Button label="Forgot password?" disabled={busy} onPress={() => setMode('recovery')} secondary />
-    </> : <Button label="Back to sign in" disabled={busy} onPress={() => { setMode('signin'); setMessage(''); }} secondary />}
+    </View> : <Button label="Back to sign in" disabled={busy} onPress={() => { setMode('signin'); setMessage(''); }} secondary />}
   </View>;
 }
 
@@ -176,7 +197,7 @@ function PasswordRecovery({ initialEmail, onBack }: { initialEmail: string; onBa
 
 const leaveStatuses = ['All', 'Pending', 'Approved', 'Declined', 'Cancelled'] satisfies ('All' | CloudLeave['status'])[];
 
-function CompanyWorkspace({ session }: { session: Session }) {
+function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }) {
   const [organizations, setOrganizations] = useState<Organization[]>([]), [org, setOrg] = useState(''), [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(true), [message, setMessage] = useState('');
   const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [showAccess, setShowAccess] = useState(false), [search, setSearch] = useState('');
@@ -194,7 +215,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const params = useLocalSearchParams<{ cloudtab?: string }>();
   const membership = snapshot.members.find(m => m.user_id === session.user.id), isHR = membership?.role === 'hr';
   const tabs = ['Overview', 'People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Contracts', 'Payroll', 'Activity', 'Workspace'] : [])];
-  const tab = tabs.find(name => name === params.cloudtab) ?? 'People';
+  const tab = tabs.find(name => name === params.cloudtab) ?? 'Overview';
   const refresh = useCallback(async () => {
     const ticket = ++generation.current;
     setFetching(true);
@@ -258,14 +279,35 @@ function CompanyWorkspace({ session }: { session: Session }) {
     if (validRange && (leave.end_date < from || (through && leave.start_date > through))) return false;
     return matchesRequest(leave, leaveQuery);
   }) : [];
-  return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
-    <View style={s.row}><View style={{ flex: 1 }}><Text style={s.logo}>easy<Text style={{ color: '#ED631C' }}>HR.</Text></Text><Text style={s.subtitle}>{currentName || 'Your workspace'} · Zambia · ZMW</Text></View><Button label="Sign out" disabled={busy} secondary onPress={() => void act(async () => { const { error } = await supabase!.auth.signOut({ scope: 'local' }); if (error) throw error; }, 'Signed out')} /></View>
-    <Text style={s.small}>{session.user.email} · {membership?.role?.toUpperCase() || 'No company role yet'}</Text>
-    {!!message && <Text accessibilityRole="alert" style={s.message}>{message}</Text>}
-    <View style={s.row}>
-      {!showAccount && <Button label={fetching ? 'Refreshing…' : 'Refresh'} onPress={() => void refresh()} disabled={fetching || busy} secondary />}
-      <Button label={showAccount ? 'Back to workspace' : 'Account'} onPress={() => setShowAccount(!showAccount)} disabled={busy} secondary />
+  const navigation = <WorkspaceNav tabs={org ? tabs : []} active={showAccount ? '' : tab} count={approvals.length} wide={wide}
+    onSelect={name => { setShowAccount(false); openTab(name); }} />;
+  return <View style={[s.frame, wide && s.desktop]}>
+    {wide && navigation}
+    <ScrollView style={s.body} keyboardShouldPersistTaps="handled" contentContainerStyle={[s.content, wide && s.contentWide]}>
+    {!wide && <Brand />}
+    <View style={s.cardHeader}>
+      <View style={s.row}>
+        <View style={s.avatar}><Text style={s.avatarText}>{session.user.email?.slice(0, 2).toUpperCase() || 'HR'}</Text></View>
+        <View style={s.identity}>
+          <Text style={s.label}>{session.user.email}</Text>
+          <Text style={s.small}>{membership?.role?.toUpperCase() || 'No company role yet'}</Text>
+        </View>
+      </View>
+      <View style={s.row}>
+        {!showAccount && <Button label={fetching ? 'Refreshing…' : 'Refresh'} onPress={() => void refresh()} disabled={fetching || busy} secondary />}
+        <Button label={showAccount ? 'Back to workspace' : 'Account'} onPress={() => setShowAccount(!showAccount)} disabled={busy} secondary />
+        <Button label="Sign out" disabled={busy} secondary onPress={() => void act(async () => {
+          const { error } = await supabase!.auth.signOut({ scope: 'local' });
+          if (error) throw error;
+        }, 'Signed out')} />
+      </View>
     </View>
+    <View style={[s.hero, wide && s.heroWide]}>
+      <Rings />
+      <Text accessibilityRole="header" style={s.heroTitle}>{showAccount ? 'Account' : tab}</Text>
+      <Text style={s.heroMeta}>{currentName || 'Your workspace'} · Zambia · ZMW</Text>
+    </View>
+    {!!message && <Text accessibilityRole="alert" style={s.message}>{message}</Text>}
     {showAccount && <AccountSettings busy={busy}
       onPasswordChange={(currentPassword, password) => act(async () => {
         const { error } = await supabase!.auth.updateUser({ current_password: currentPassword, password });
@@ -295,7 +337,6 @@ function CompanyWorkspace({ session }: { session: Session }) {
         setLeaveThrough('');
         setOrg(o.id);
       }} />)}</View>}
-      <View style={s.row}>{tabs.map(t => <Button key={t} label={t === 'Approvals' && approvals.length ? `Approvals (${approvals.length})` : t} selected={tab === t} secondary={tab !== t} onPress={() => openTab(t)} />)}</View>
       {tab === 'Overview' && <WorkspaceOverview snapshot={snapshot} approvalCount={approvals.length} canApprove={tabs.includes('Approvals')}
         userId={session.user.id} openTab={name => {
           if (name === 'People') setProfileId(null);
@@ -373,10 +414,12 @@ function CompanyWorkspace({ session }: { session: Session }) {
         {(tab === 'Approvals' ? visibleApprovals : visibleLeave).map(leave => {
           const employee = employeesById.get(leave.employee_id);
           const canCancel = tab === 'Leave' && (isHR || employee?.user_id === session.user.id);
-          return <View key={leave.id} style={s.card}>
-            <Text style={s.heading}>{employee?.name || 'Employee'}</Text>
+          return <View key={leave.id} style={s.nestedCard}>
+            <View style={s.cardHeader}><Text style={s.heading}>{employee?.name || 'Employee'}</Text>
+              <StatusPill label={leave.status} tone={leave.status === 'Pending' ? 'pending' : leave.status === 'Approved' ? 'positive' : 'neutral'} />
+            </View>
             <Text style={s.subtitle}>{leave.start_date} → {leave.end_date} · {leave.days} days</Text>
-            <Text>{leave.reason}</Text><Text style={s.label}>{leave.status}</Text>
+            <Text style={s.label}>{leave.reason}</Text>
             {leave.status === 'Pending' && canDecide(employee) && <View style={s.row}>
               <Button label="Approve" disabled={busy} onPress={() => void act(() => rpc('hr_decide_leave', { p_id: leave.id, p_approve: true }), 'Leave approved and balance updated')} />
               <Button label="Decline" disabled={busy} secondary onPress={() => void act(() => rpc('hr_decide_leave', { p_id: leave.id, p_approve: false }), 'Leave declined')} />
@@ -413,8 +456,9 @@ function CompanyWorkspace({ session }: { session: Session }) {
         </View>)}
       </View>}
     </>}
-    <Text style={s.small}>Attendance and compliance are available in the fictional demo.</Text>
-  </ScrollView>;
+    </ScrollView>
+    {!wide && !!org && navigation}
+  </View>;
 }
 type SaveForm = { busy: boolean; onCancel: () => void; onSave: (values: Record<string, unknown>) => Promise<void> };
 function EmployeeForm({ employee, snapshot, busy, onCancel, onSave }: SaveForm & { employee: CloudEmployee | 'new'; snapshot: Snapshot }) {
@@ -582,12 +626,14 @@ function ContractsRegister({ org, employees }: { org: string; employees: CloudEm
   const [editor, setEditor] = useState<Contract | 'new' | null>(null);
   const names = new Map(employees.map(employee => [employee.id, employee.name]));
   return <View style={s.card}>
-    <Text style={s.heading}>Contract register</Text>
-    <Text style={s.small}>Track contract dates and internal review.</Text>
-    <View style={s.row}>
-      <Button label="Refresh contracts" secondary disabled={busy} onPress={reload} />
-      <Button label="Add contract" disabled={busy || !records || !employees.length} onPress={() => setEditor('new')} />
+    <View style={s.cardHeader}>
+      <Text accessibilityRole="header" style={s.heading}>Contract register</Text>
+      <View style={s.row}>
+        <Button label="Refresh" secondary disabled={busy} onPress={reload} />
+        <Button label="Add contract" disabled={busy || !records || !employees.length} onPress={() => setEditor('new')} />
+      </View>
     </View>
+    <Text style={s.small}>Track contract dates and internal review.</Text>
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     {!records && !error && <Text style={s.subtitle}>Loading contracts…</Text>}
     {records?.length === 0 && <Text style={s.subtitle}>No contracts recorded yet.</Text>}
@@ -595,10 +641,12 @@ function ContractsRegister({ org, employees }: { org: string; employees: CloudEm
       employees={employees} busy={busy} onCancel={() => setEditor(null)} onSave={async values => {
         if (await save(() => rpc('hr_save_contract', { p_org: org, ...values }))) setEditor(null);
       }} />}
-    {[...(records ?? [])].sort((a, b) => b.start_date.localeCompare(a.start_date)).map(contract => <View key={contract.id} style={s.form}>
-      <Text style={s.label}>{contract.title}</Text>
+    {[...(records ?? [])].sort((a, b) => b.start_date.localeCompare(a.start_date)).map(contract => <View key={contract.id} style={s.nestedCard}>
+      <View style={s.cardHeader}><Text style={s.label}>{contract.title}</Text>
+        <StatusPill label={contract.reviewed_at ? 'Reviewed' : 'Needs review'} tone={contract.reviewed_at ? 'positive' : 'pending'} />
+      </View>
       <Text style={s.subtitle}>{names.get(contract.employee_id) ?? 'Employee'} · {contract.start_date}{contract.end_date ? ` to ${contract.end_date}` : ''}</Text>
-      <Text style={s.small}>{contract.reviewed_at ? `Internally reviewed ${new Date(contract.reviewed_at).toLocaleDateString()}` : 'Needs internal review'}</Text>
+      {contract.reviewed_at && <Text style={s.small}>Internally reviewed {new Date(contract.reviewed_at).toLocaleDateString()}</Text>}
       <View style={s.row}>
         <Button label="Edit" secondary disabled={busy || (editor !== 'new' && editor?.id === contract.id)} onPress={() => setEditor(contract)} />
         {!contract.reviewed_at && <Button label="Mark reviewed" disabled={busy} onPress={() => void save(() => rpc('hr_review_contract', { p_org: org, p_id: contract.id, p_version: contract.version }))} />}
@@ -668,7 +716,10 @@ function PayrollMonth({ org, period, employees }: { org: string; period: string;
     <View style={s.row}><Text style={s.heading}>{period}</Text><Button label="Refresh drafts" secondary disabled={busy} onPress={reload} /></View>
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     {!records && !error && <Text style={s.subtitle}>Loading payroll drafts…</Text>}
-    {records && <Text style={s.label}>{money(gross)} draft gross total · {records.length} of {employees.length} employees entered</Text>}
+    {records && <View style={s.metrics}>
+      <View style={s.metric}><Text style={s.label}>Draft gross total</Text><Text style={s.metricValue}>{money(gross)}</Text></View>
+      <View style={s.metric}><Text style={s.label}>Employee drafts</Text><Text style={s.metricValue}>{records.length} / {employees.length}</Text></View>
+    </View>}
     {editor && selected && <PayrollForm key={editor.id} employee={editor} draft={selected.draft} busy={busy} onCancel={() => setSelected(null)}
       onSave={async values => {
         if (await save(() => rpc('hr_save_payroll_draft', { p_org: org, p_period: `${period}-01`, ...values }))) setSelected(null);
@@ -677,7 +728,7 @@ function PayrollMonth({ org, period, employees }: { org: string; period: string;
       const draft = drafts.get(employee.id);
       return <View key={employee.id} style={s.listItem}>
         <View style={{ flex: 1 }}><Text style={s.label}>{employee.name}</Text>
-          <Text style={s.subtitle}>{draft ? money(draft.base_minor + draft.additional_minor) : 'Draft needed'}</Text>
+          {draft ? <Text style={s.subtitle}>{money(draft.base_minor + draft.additional_minor)}</Text> : <StatusPill label="Draft needed" tone="pending" />}
         </View>
         <Button label={draft ? 'Edit draft' : 'Add draft'} secondary disabled={busy || selected?.employeeId === employee.id} onPress={() => setSelected({ employeeId: employee.id, draft })} />
       </View>;
@@ -728,15 +779,19 @@ function WorkspaceOverview({ snapshot, approvalCount, canApprove, userId, openTa
     request.employee_id === employee.id && request.status === 'Pending' ? days + request.days : days, 0) : 0;
   return <View style={s.card}>
     <Text style={s.heading}>Workspace overview</Text>
-    {canApprove && <View style={s.form}>
-      <Text style={s.label}>{approvalCount} {approvalCount === 1 ? 'request awaits' : 'requests await'} your decision</Text>
-      <Button label="Open approvals" secondary onPress={() => openTab('Approvals')} />
-    </View>}
-    {employee && <View style={s.form}>
-      <Text style={s.label}>Your leave balance</Text>
-      <Text style={s.subtitle}>{Math.max(0, employee.leave_balance - reserved)} days available · {reserved} reserved</Text>
-      <Button label="Open your profile" secondary onPress={() => openProfile(employee.id)} />
-    </View>}
+    <View style={s.metrics}>
+      {canApprove && <View style={s.metric}>
+        <Text style={s.label}>Awaiting your decision</Text>
+        <Text style={s.metricValue}>{approvalCount}</Text>
+        <View style={s.row}><Button label="Open approvals" secondary onPress={() => openTab('Approvals')} /></View>
+      </View>}
+      {employee && <View style={s.metric}>
+        <Text style={s.label}>Leave days available</Text>
+        <Text style={s.metricValue}>{Math.max(0, employee.leave_balance - reserved)}</Text>
+        <Text style={s.small}>{reserved} reserved</Text>
+        <View style={s.row}><Button label="Open your profile" secondary onPress={() => openProfile(employee.id)} /></View>
+      </View>}
+    </View>
     <View style={s.row}>
       <Button label="People directory" secondary onPress={() => openTab('People')} />
       <Button label="Leave requests" secondary onPress={() => openTab('Leave')} />
@@ -928,10 +983,10 @@ function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employ
 
 const calendarStyles = StyleSheet.create({
   week: { flexDirection: 'row', gap: 2 },
-  weekday: { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: '600', color: '#647267' },
+  weekday: { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: '600', color: colors.muted },
   day: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
-  selected: { backgroundColor: '#EAF2DA', borderWidth: 1, borderColor: '#647267' },
-  count: { fontSize: 11, fontWeight: '700', color: '#A83318' },
+  selected: { backgroundColor: colors.sage, borderWidth: 1, borderColor: colors.forest },
+  count: { fontSize: 11, fontWeight: '700', color: colors.copper },
 });
 
 function ConfirmedAction({ label, confirmLabel, busy, onConfirm }: {
@@ -978,4 +1033,3 @@ function AccessForm({ employees, busy, onCancel, onSave }: SaveForm & { employee
   const [email, setEmail] = useState(''), [role, setRole] = useState('employee'), [employee, setEmployee] = useState<string | null>(null);
   return <View style={s.form}><Field label="Work email" value={email} onChange={setEmail} /><Text style={s.label}>Role</Text><View style={s.row}>{['employee', 'manager', 'hr'].map(r => <Button key={r} label={r.toUpperCase()} secondary={role !== r} onPress={() => setRole(r)} />)}</View><Text style={s.label}>Link employee record (matching email required)</Text><View style={s.row}><Button label="No employee record" secondary={employee !== null} onPress={() => setEmployee(null)} />{employees.filter(e => !e.user_id).map(e => <Button key={e.id} label={e.name} secondary={employee !== e.id} onPress={() => { setEmployee(e.id); setEmail(e.email); }} />)}</View><Text style={s.small}>HR can manage all records and company access. Managers see their assigned reports. Employees see only their own record and leave.</Text><View style={s.row}><Button label="Grant access" disabled={busy || !email.trim()} onPress={() => void onSave({ p_email: email.trim(), p_role: role, p_employee_id: employee })} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
 }
-const s = StyleSheet.create({ root: { flex: 1, backgroundColor: '#F8F9F5' }, auth: { flexGrow: 1, justifyContent: 'center', alignSelf: 'center', width: '100%', maxWidth: 520, padding: 24, gap: 18 }, content: { padding: 22, gap: 18, maxWidth: 1000, width: '100%', alignSelf: 'center' }, logo: { fontSize: 34, fontWeight: '800', color: '#24352C', letterSpacing: -1.5 }, title: { fontSize: 27, fontWeight: '700', color: '#24352C' }, subtitle: { fontSize: 14, color: '#647267', lineHeight: 22 }, small: { fontSize: 12, color: '#647267', lineHeight: 19 }, heading: { fontSize: 18, color: '#24352C', fontWeight: '700' }, label: { fontSize: 13, color: '#24352C', fontWeight: '600' }, card: { padding: 20, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E1E7D9', borderRadius: 15, gap: 16 }, input: { borderWidth: 1, borderColor: '#CAD3C3', backgroundColor: '#FCFDF9', padding: 13, borderRadius: 9, minHeight: 48, color: '#24352C' }, button: { minHeight: 46, paddingHorizontal: 17, paddingVertical: 13, backgroundColor: '#ED631C', borderRadius: 9, alignItems: 'center', justifyContent: 'center' }, buttonText: { fontWeight: '700', color: '#FFF', fontSize: 13 }, secondary: { backgroundColor: '#EAF2DA' }, row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10 }, listItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 17, borderBottomWidth: 1, borderColor: '#E8EDE1' }, form: { backgroundColor: '#F5F8EE', padding: 16, borderRadius: 12, gap: 14 }, error: { color: '#A83318', lineHeight: 21 }, message: { backgroundColor: '#EAF2DA', padding: 15, borderRadius: 9, color: '#24352C', lineHeight: 22 }, loading: { padding: 30, color: '#24352C' } });
