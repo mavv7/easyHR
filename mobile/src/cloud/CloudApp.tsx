@@ -4,11 +4,11 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
-import { CloudEmployee, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
+import { CloudEmployee, CloudLeave, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
 import { weekdays } from '../domain';
 
-function Button({ label, onPress, disabled = false, secondary = false }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean }) {
-  return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[s.button, secondary && s.secondary, disabled && { opacity: 0.45 }]}><Text style={[s.buttonText, secondary && { color: '#24352C' }]}>{label}</Text></Pressable>;
+function Button({ label, onPress, disabled = false, secondary = false, selected }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean }) {
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress} style={[s.button, secondary && s.secondary, disabled && { opacity: 0.45 }]}><Text style={[s.buttonText, secondary && { color: '#24352C' }]}>{label}</Text></Pressable>;
 }
 function Field({ label, value, onChange, secure = false }: { label: string; value: string; onChange: (v: string) => void; secure?: boolean }) {
   return <View style={{ gap: 6 }}><Text style={s.label}>{label}</Text><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} secureTextEntry={secure} autoCapitalize="none" autoCorrect={false} style={s.input} /></View>;
@@ -173,11 +173,15 @@ function PasswordRecovery({ initialEmail, onBack }: { initialEmail: string; onBa
   </View>;
 }
 
+const leaveStatuses = ['All', 'Pending', 'Approved', 'Declined', 'Cancelled'] satisfies ('All' | CloudLeave['status'])[];
+
 function CompanyWorkspace({ session }: { session: Session }) {
   const [organizations, setOrganizations] = useState<Organization[]>([]), [org, setOrg] = useState(''), [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(true), [message, setMessage] = useState('');
   const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [showAccess, setShowAccess] = useState(false), [search, setSearch] = useState('');
   const [showAccount, setShowAccount] = useState(false);
+  const [leaveStatus, setLeaveStatus] = useState<(typeof leaveStatuses)[number]>('All');
+  const [leaveSearch, setLeaveSearch] = useState('');
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
   const params = useLocalSearchParams<{ cloudtab?: string }>();
   const tab = ['People', 'Leave', 'Activity', 'Workspace'].includes(params.cloudtab || '') ? params.cloudtab! : 'People';
@@ -205,6 +209,17 @@ function CompanyWorkspace({ session }: { session: Session }) {
   }
   const currentName = organizations.find(o => o.id === org)?.name;
   const eligible = snapshot.employees.filter(e => isHR || e.user_id === session.user.id);
+  const employeesById = new Map(snapshot.employees.map(employee => [employee.id, employee]));
+  const leaveQuery = leaveSearch.trim().toLocaleLowerCase();
+  const visibleLeave = tab === 'Leave' ? snapshot.leave.filter(leave => {
+    if (leaveStatus !== 'All' && leave.status !== leaveStatus) return false;
+    return !leaveQuery || [
+      employeesById.get(leave.employee_id)?.name,
+      leave.start_date,
+      leave.end_date,
+      leave.reason,
+    ].some(value => value?.toLocaleLowerCase().includes(leaveQuery));
+  }) : [];
   return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
     <View style={s.row}><View style={{ flex: 1 }}><Text style={s.logo}>easy<Text style={{ color: '#ED631C' }}>HR.</Text></Text><Text style={s.subtitle}>{currentName || 'Your workspace'} · Zambia · ZMW</Text></View><Button label="Sign out" disabled={busy} secondary onPress={() => void act(async () => { const { error } = await supabase!.auth.signOut({ scope: 'local' }); if (error) throw error; }, 'Signed out')} /></View>
     <Text style={s.small}>{session.user.email} · {membership?.role?.toUpperCase() || 'No company role yet'}</Text>
@@ -224,7 +239,17 @@ function CompanyWorkspace({ session }: { session: Session }) {
       }, 'Other sessions were signed out')} />}
     {!showAccount && !org && !fetching && <View style={s.card}><Text style={s.heading}>Waiting for company access</Text><Text style={s.subtitle}>Confirm your work email or ask your HR administrator to authorize access, then refresh.</Text></View>}
     {!showAccount && !!org && <>
-      {organizations.length > 1 && <View style={s.row}>{organizations.map(o => <Button key={o.id} label={o.name} disabled={busy || fetching} secondary={org !== o.id} onPress={() => { generation.current++; setSnapshot(emptySnapshot); setEditor(null); setShowLeave(false); setShowAccess(false); setOrg(o.id); }} />)}</View>}
+      {organizations.length > 1 && <View style={s.row}>{organizations.map(o => <Button key={o.id} label={o.name} disabled={busy || fetching} secondary={org !== o.id} onPress={() => {
+        if (org === o.id) return;
+        generation.current++;
+        setSnapshot(emptySnapshot);
+        setEditor(null);
+        setShowLeave(false);
+        setShowAccess(false);
+        setLeaveSearch('');
+        setLeaveStatus('All');
+        setOrg(o.id);
+      }} />)}</View>}
       <View style={s.row}>{['People', 'Leave', ...(isHR ? ['Activity', 'Workspace'] : [])].map(t => <Button key={t} label={t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
       {tab === 'People' && <View style={s.card}><View style={s.row}><Text style={s.heading}>People · {snapshot.employees.length}</Text>{isHR && <Button label="Add employee" disabled={busy} onPress={() => setEditor('new')} />}</View><Field label="Search people" value={search} onChange={setSearch} />
         {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} employee={editor} snapshot={snapshot} busy={busy} onCancel={() => setEditor(null)} onSave={async values => { const ok = await act(() => rpc('hr_save_employee', { p_organization_id: org, ...values }), 'Employee saved'); if (ok) setEditor(null); }} />}
@@ -233,9 +258,15 @@ function CompanyWorkspace({ session }: { session: Session }) {
       </View>}
       {tab === 'Leave' && <View style={s.card}><Text style={s.heading}>Leave requests</Text><Text style={s.small}>Current policy: whole weekdays only. Public holidays and statutory accrual are not configured. Pending requests reserve available days.</Text><Button label="Request leave" disabled={busy || !eligible.length} onPress={() => setShowLeave(true)} />
         {showLeave && <LeaveForm employees={eligible} busy={busy} onCancel={() => setShowLeave(false)} onSave={async values => { const ok = await act(() => rpc('hr_request_leave', values), 'Leave submitted'); if (ok) setShowLeave(false); }} />}
-        {!snapshot.leave.length && <Text style={s.subtitle}>No leave requests yet.</Text>}
-        {snapshot.leave.map(leave => {
-          const employee = snapshot.employees.find(e => e.id === leave.employee_id);
+        {!!snapshot.leave.length && <>
+          <Field label="Search leave by name, date or reason" value={leaveSearch} onChange={setLeaveSearch} />
+          <View style={s.row}>
+            {leaveStatuses.map(status => <Button key={status} label={status} selected={status === leaveStatus} secondary={status !== leaveStatus} onPress={() => setLeaveStatus(status)} />)}
+          </View>
+        </>}
+        {!visibleLeave.length && <Text style={s.subtitle}>{snapshot.leave.length ? 'No leave requests match these filters.' : 'No leave requests yet.'}</Text>}
+        {visibleLeave.map(leave => {
+          const employee = employeesById.get(leave.employee_id);
           const ownLeave = employee?.user_id === session.user.id || employee?.email === session.user.email?.toLowerCase();
           const canApprove = !ownLeave && (isHR || (membership?.role === 'manager' && employee?.manager_user_id === session.user.id));
           const canCancel = isHR || employee?.user_id === session.user.id;
