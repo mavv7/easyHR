@@ -4,6 +4,12 @@ function dateKey(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
+export function isDateKey(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && dateKey(date) === value;
+}
+
 export function calendarMonth(month: string, offset: number) {
   const date = new Date(`${month}-01T00:00:00Z`);
   date.setUTCMonth(date.getUTCMonth() + offset);
@@ -27,4 +33,12 @@ export function calendarDays(month: string, requests: CloudLeave[]) {
   }
   while (days.length % 7) days.push(null);
   return days;
+}
+
+export function monthlyAgenda(days: ReturnType<typeof calendarDays>) {
+  const byId = new Map<string, CloudLeave>();
+  for (const day of days) {
+    for (const request of day?.requests ?? []) byId.set(request.id, request);
+  }
+  return [...byId.values()].sort((a, b) => a.start_date.localeCompare(b.start_date) || a.end_date.localeCompare(b.end_date));
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CloudLeave } from '../src/cloud/api.ts';
-import { calendarDays, calendarMonth } from '../src/cloud/leaveCalendar.ts';
+import { calendarDays, calendarMonth, isDateKey, monthlyAgenda } from '../src/cloud/leaveCalendar.ts';
 
 test('leave calendar aligns Monday-first weeks and handles leap days and year changes', () => {
   const days = calendarDays('2028-02', []);
@@ -11,6 +11,9 @@ test('leave calendar aligns Monday-first weeks and handles leap days and year ch
   assert.equal(days.length % 7, 0);
   assert.equal(calendarMonth('2027-12', 1), '2028-01');
   assert.equal(calendarMonth('2028-01', -1), '2027-12');
+  assert.equal(isDateKey('2028-02-29'), true);
+  assert.equal(isDateKey('2027-02-29'), false);
+  assert.equal(isDateKey('2028-2-29'), false);
 });
 
 test('leave calendar shows pending and approved requests across months on weekdays', () => {
@@ -26,4 +29,5 @@ test('leave calendar shows pending and approved requests across months on weekda
   assert.equal(march.find(day => day?.date === '2028-03-04')?.requests.length, 0);
   assert.equal(march.find(day => day?.date === '2028-03-06')?.requests.length, 2);
   assert.equal(march.find(day => day?.date === '2028-03-07')?.requests.length, 0);
+  assert.deepEqual(monthlyAgenda(march).map(request => request.id), ['Pending', 'Approved']);
 });

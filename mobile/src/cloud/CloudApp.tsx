@@ -4,7 +4,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
-import { calendarDays, calendarMonth } from './leaveCalendar';
+import { calendarDays, calendarMonth, isDateKey, monthlyAgenda } from './leaveCalendar';
 import { Audit, CloudEmployee, CloudLeave, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
 import { weekdays } from '../domain';
 
@@ -182,8 +182,11 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [showAccess, setShowAccess] = useState(false), [search, setSearch] = useState('');
   const [showAccount, setShowAccount] = useState(false);
   const [profileId, setProfileId] = useState<string | null>(null);
+  const [departmentFilter, setDepartmentFilter] = useState('');
   const [leaveStatus, setLeaveStatus] = useState<(typeof leaveStatuses)[number]>('All');
   const [leaveSearch, setLeaveSearch] = useState('');
+  const [leaveFrom, setLeaveFrom] = useState('');
+  const [leaveThrough, setLeaveThrough] = useState('');
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
   const params = useLocalSearchParams<{ cloudtab?: string }>();
   const membership = snapshot.members.find(m => m.user_id === session.user.id), isHR = membership?.role === 'hr';
@@ -223,12 +226,17 @@ function CompanyWorkspace({ session }: { session: Session }) {
     : [];
   const profile = profileId ? employeesById.get(profileId) : undefined;
   const peopleQuery = search.trim().toLocaleLowerCase();
+  const departmentQuery = departmentFilter.trim().toLocaleLowerCase();
   const visiblePeople = tab === 'People' && !profile ? snapshot.employees.filter(employee =>
+    employee.department.toLocaleLowerCase().includes(departmentQuery) &&
     `${employee.name} ${employee.department} ${employee.job_title} ${employee.email}`.toLocaleLowerCase().includes(peopleQuery),
   ) : [];
   const leaveQuery = leaveSearch.trim().toLocaleLowerCase();
+  const from = leaveFrom.trim(), through = leaveThrough.trim();
+  const validRange = (!from || isDateKey(from)) && (!through || isDateKey(through)) && (!from || !through || from <= through);
   const visibleLeave = tab === 'Leave' ? snapshot.leave.filter(leave => {
     if (leaveStatus !== 'All' && leave.status !== leaveStatus) return false;
+    if (validRange && (leave.end_date < from || (through && leave.start_date > through))) return false;
     return !leaveQuery || [
       employeesById.get(leave.employee_id)?.name,
       leave.start_date,
@@ -262,10 +270,13 @@ function CompanyWorkspace({ session }: { session: Session }) {
         setEditor(null);
         setProfileId(null);
         setSearch('');
+        setDepartmentFilter('');
         setShowLeave(false);
         setShowAccess(false);
         setLeaveSearch('');
         setLeaveStatus('All');
+        setLeaveFrom('');
+        setLeaveThrough('');
         setOrg(o.id);
       }} />)}</View>}
       <View style={s.row}>{tabs.map(t => <Button key={t} label={t === 'Approvals' && approvals.length ? `Approvals (${approvals.length})` : t} selected={tab === t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
@@ -276,9 +287,11 @@ function CompanyWorkspace({ session }: { session: Session }) {
         </View> : <>
           <View style={s.row}><Text style={s.heading}>People · {snapshot.employees.length}</Text>{isHR && <Button label="Add employee" disabled={busy} onPress={() => setEditor('new')} />}</View>
           <Field label="Search people" value={search} onChange={setSearch} />
+          {!!snapshot.employees.length && <Field label="Filter by department" value={departmentFilter} onChange={setDepartmentFilter} />}
         </>}
         {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} employee={editor} snapshot={snapshot} busy={busy} onCancel={() => setEditor(null)} onSave={async values => { const ok = await act(() => rpc('hr_save_employee', { p_organization_id: org, ...values }), 'Employee saved'); if (ok) setEditor(null); }} />}
-        {profile && <EmployeeProfile employee={profile} employees={snapshot.employees} requests={snapshot.leave} />}
+        {profile && <EmployeeProfile employee={profile} employees={snapshot.employees} requests={snapshot.leave}
+          onOpenProfile={id => { setEditor(null); setProfileId(id); }} />}
         {visiblePeople.map(employee => <View key={employee.id} style={s.listItem}>
           <Pressable accessibilityRole="button" accessibilityLabel={`View ${employee.name}'s profile`}
             disabled={busy} onPress={() => { setEditor(null); setProfileId(employee.id); }} style={{ flex: 1, gap: 5 }}>
@@ -300,10 +313,16 @@ function CompanyWorkspace({ session }: { session: Session }) {
             setShowLeave(false);
             setLeaveStatus('Pending');
             setLeaveSearch('');
+            setLeaveFrom('');
+            setLeaveThrough('');
           }
         }} />}
         {!!snapshot.leave.length && <>
           <Field label="Search leave by name, date or reason" value={leaveSearch} onChange={setLeaveSearch} />
+          <Field label="From date (YYYY-MM-DD)" value={leaveFrom} onChange={setLeaveFrom} />
+          <Field label="Through date (YYYY-MM-DD)" value={leaveThrough} onChange={setLeaveThrough} />
+          {!validRange && <Text accessibilityRole="alert" style={s.error}>Use valid dates in YYYY-MM-DD format, with the from date first.</Text>}
+          {(!!leaveFrom || !!leaveThrough) && <Button label="Clear dates" secondary onPress={() => { setLeaveFrom(''); setLeaveThrough(''); }} />}
           <View style={s.row}>
             {leaveStatuses.map(status => <Button key={status} label={status} selected={status === leaveStatus} secondary={status !== leaveStatus} onPress={() => setLeaveStatus(status)} />)}
           </View>
@@ -385,12 +404,21 @@ const activityLabels: Record<string, string> = {
   'invitation.cancelled': 'Pending authorization withdrawn',
 };
 
+const activityCategories = [
+  { label: 'All', prefixes: [] },
+  { label: 'Employees', prefixes: ['employee.'] },
+  { label: 'Leave', prefixes: ['leave.'] },
+  { label: 'Access', prefixes: ['member.', 'invitation.'] },
+  { label: 'Company', prefixes: ['organization.'] },
+];
+
 function ActivityHistory({ snapshot, employees, user }: {
   snapshot: Snapshot;
   employees: Map<string, CloudEmployee>;
   user: Session['user'];
 }) {
   const [search, setSearch] = useState('');
+  const [category, setCategory] = useState(activityCategories[0]);
   const query = search.trim().toLocaleLowerCase();
   const employeesByUser = new Map(snapshot.employees.map(employee => [employee.user_id, employee.name]));
   const leaveById = new Map(snapshot.leave.map(leave => [leave.id, leave]));
@@ -410,13 +438,18 @@ function ActivityHistory({ snapshot, employees, user }: {
   const events = snapshot.audit.map(event => ({
     event, label: activityLabels[event.action] ?? event.action, actor: userName(event.actor_id), subject: subject(event),
   })).filter(({ event, label, actor, subject }) =>
+    (!category.prefixes.length || category.prefixes.some(prefix => event.action.startsWith(prefix))) &&
     [event.action, event.actor_id, event.record_id, label, actor, subject].some(value => value?.toLocaleLowerCase().includes(query)),
   );
   return <View style={s.card}>
     <Text style={s.heading}>Activity history</Text>
     <Text style={s.small}>Latest 100 events</Text>
-    {!!snapshot.audit.length && <Field label="Search activity" value={search} onChange={setSearch} />}
-    {!events.length && <Text style={s.subtitle}>{snapshot.audit.length ? 'No events match your search.' : 'No activity recorded yet.'}</Text>}
+    {!!snapshot.audit.length && <>
+      <Field label="Search activity" value={search} onChange={setSearch} />
+      <View style={s.row}>{activityCategories.map(item => <Button key={item.label} label={item.label}
+        selected={item === category} secondary={item !== category} onPress={() => setCategory(item)} />)}</View>
+    </>}
+    {!events.length && <Text style={s.subtitle}>{snapshot.audit.length ? 'No events match these filters.' : 'No activity recorded yet.'}</Text>}
     {events.map(({ event, label, actor, subject }) => <View key={event.id} style={s.listItem}>
       <View style={{ flex: 1 }}>
         <Text style={s.label}>{label}</Text>
@@ -428,8 +461,14 @@ function ActivityHistory({ snapshot, employees, user }: {
   </View>;
 }
 
-function EmployeeProfile({ employee, employees, requests }: { employee: CloudEmployee; employees: CloudEmployee[]; requests: CloudLeave[] }) {
+function EmployeeProfile({ employee, employees, requests, onOpenProfile }: {
+  employee: CloudEmployee;
+  employees: CloudEmployee[];
+  requests: CloudLeave[];
+  onOpenProfile: (id: string) => void;
+}) {
   const manager = employees.find(entry => entry.user_id && entry.user_id === employee.manager_user_id);
+  const directReports = employee.user_id ? employees.filter(entry => entry.id !== employee.id && entry.manager_user_id === employee.user_id) : [];
   const employeeRequests = requests.filter(request => request.employee_id === employee.id);
   const reserved = employeeRequests.reduce((total, request) => request.status === 'Pending' ? total + request.days : total, 0);
   return <>
@@ -441,6 +480,10 @@ function EmployeeProfile({ employee, employees, requests }: { employee: CloudEmp
       <Text style={s.label}>Approving manager</Text>
       <Text style={s.subtitle}>{manager?.name ?? (employee.manager_user_id ? 'Manager assigned' : 'No manager assigned')}</Text>
     </View>
+    {!!directReports.length && <View style={s.form}>
+      <Text style={s.heading}>Direct reports</Text>
+      <View style={s.row}>{directReports.map(report => <Button key={report.id} label={report.name} secondary onPress={() => onOpenProfile(report.id)} />)}</View>
+    </View>}
     <View style={s.form}>
       <Text style={s.heading}>Leave balance</Text>
       <Text style={s.subtitle}>{employee.leave_balance} days in balance · {reserved} reserved</Text>
@@ -547,9 +590,10 @@ function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employ
   }).formatToParts(new Date());
   const today = ['year', 'month', 'day'].map(type => dayParts.find(part => part.type === type)?.value).join('-');
   const [selected, setSelected] = useState(today);
+  const [view, setView] = useState<'Day' | 'Month'>('Day');
   const month = selected.slice(0, 7);
   const days = calendarDays(month, requests);
-  const selectedRequests = days.find(day => day?.date === selected)?.requests ?? [];
+  const selectedRequests = view === 'Month' ? monthlyAgenda(days) : days.find(day => day?.date === selected)?.requests ?? [];
   const monthLabel = new Date(`${month}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const dateLabel = new Date(`${selected}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 
@@ -560,6 +604,11 @@ function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employ
       <Button label="Today" secondary onPress={() => setSelected(today)} />
       <Button label="Next month" secondary onPress={() => setSelected(`${calendarMonth(month, 1)}-01`)} />
     </View>
+    <View style={s.row}>
+      {(['Day', 'Month'] as const).map(option => <Button key={option} label={option === 'Month' ? 'Month agenda' : 'Day view'}
+        selected={view === option} secondary={view !== option} onPress={() => setView(option)} />)}
+    </View>
+    {view === 'Day' && <>
     <View style={calendarStyles.week}>
       {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(label => <Text key={label} style={calendarStyles.weekday}>{label}</Text>)}
     </View>
@@ -573,8 +622,9 @@ function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employ
           </Pressable>
         : <View key={index} style={calendarStyles.day} />)}
     </View>)}
-    <Text style={s.heading}>{dateLabel}</Text>
-    {!selectedRequests.length && <Text style={s.subtitle}>No pending or approved leave on this date.</Text>}
+    </>}
+    <Text style={s.heading}>{view === 'Month' ? 'Monthly agenda' : dateLabel}</Text>
+    {!selectedRequests.length && <Text style={s.subtitle}>No pending or approved leave {view === 'Month' ? 'this month' : 'on this date'}.</Text>}
     {selectedRequests.map(request => <View key={request.id} style={s.listItem}>
       <View>
         <Text style={s.label}>{employees.get(request.employee_id)?.name ?? 'Employee'}</Text>
