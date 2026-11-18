@@ -186,8 +186,9 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const [leaveSearch, setLeaveSearch] = useState('');
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
   const params = useLocalSearchParams<{ cloudtab?: string }>();
-  const tab = ['People', 'Leave', 'Calendar', 'Activity', 'Workspace'].includes(params.cloudtab || '') ? params.cloudtab! : 'People';
   const membership = snapshot.members.find(m => m.user_id === session.user.id), isHR = membership?.role === 'hr';
+  const tabs = ['People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Activity', 'Workspace'] : [])];
+  const tab = tabs.find(name => name === params.cloudtab) ?? 'People';
   const refresh = useCallback(async () => {
     const ticket = ++generation.current;
     setFetching(true);
@@ -212,6 +213,14 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const currentName = organizations.find(o => o.id === org)?.name;
   const eligible = snapshot.employees.filter(e => isHR || e.user_id === session.user.id);
   const employeesById = new Map(snapshot.employees.map(employee => [employee.id, employee]));
+  const userEmail = session.user.email?.toLowerCase();
+  function canDecide(employee: CloudEmployee | undefined) {
+    return !!employee && employee.user_id !== session.user.id && employee.email !== userEmail &&
+      (isHR || (membership?.role === 'manager' && employee.manager_user_id === session.user.id));
+  }
+  const approvals = tabs.includes('Approvals')
+    ? snapshot.leave.filter(leave => leave.status === 'Pending' && canDecide(employeesById.get(leave.employee_id)))
+    : [];
   const profile = profileId ? employeesById.get(profileId) : undefined;
   const peopleQuery = search.trim().toLocaleLowerCase();
   const visiblePeople = tab === 'People' && !profile ? snapshot.employees.filter(employee =>
@@ -259,7 +268,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
         setLeaveStatus('All');
         setOrg(o.id);
       }} />)}</View>}
-      <View style={s.row}>{['People', 'Leave', 'Calendar', ...(isHR ? ['Activity', 'Workspace'] : [])].map(t => <Button key={t} label={t} selected={tab === t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
+      <View style={s.row}>{tabs.map(t => <Button key={t} label={t === 'Approvals' && approvals.length ? `Approvals (${approvals.length})` : t} selected={tab === t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
       {tab === 'People' && <View style={s.card}>
         {profile ? <View style={s.row}>
           <Button label="Back to people" disabled={busy} secondary onPress={() => { setEditor(null); setProfileId(null); }} />
@@ -283,7 +292,9 @@ function CompanyWorkspace({ session }: { session: Session }) {
         {!profile && !!snapshot.employees.length && !visiblePeople.length && <Text style={s.subtitle}>No employees match your search.</Text>}
         {!snapshot.employees.length && <Text style={s.subtitle}>{isHR ? 'Add your first employee to get started.' : 'No employee records are assigned to your account yet.'}</Text>}
       </View>}
-      {tab === 'Leave' && <View style={s.card}><Text style={s.heading}>Leave requests</Text><Text style={s.small}>Current policy: whole weekdays only. Public holidays and statutory accrual are not configured. Pending requests reserve available days.</Text><Button label="Request leave" disabled={busy || !eligible.length} onPress={() => setShowLeave(true)} />
+      {(tab === 'Leave' || tab === 'Approvals') && <View style={s.card}>
+        {tab === 'Leave' ? <>
+        <Text style={s.heading}>Leave requests</Text><Text style={s.small}>Current policy: whole weekdays only. Public holidays and statutory accrual are not configured. Pending requests reserve available days.</Text><Button label="Request leave" disabled={busy || !eligible.length} onPress={() => setShowLeave(true)} />
         {showLeave && <LeaveForm employees={eligible} requests={snapshot.leave} busy={busy} onCancel={() => setShowLeave(false)} onSave={async values => {
           if (await act(() => rpc('hr_request_leave', values), 'Leave submitted')) {
             setShowLeave(false);
@@ -298,16 +309,18 @@ function CompanyWorkspace({ session }: { session: Session }) {
           </View>
         </>}
         {!visibleLeave.length && <Text style={s.subtitle}>{snapshot.leave.length ? 'No leave requests match these filters.' : 'No leave requests yet.'}</Text>}
-        {visibleLeave.map(leave => {
+        </> : <>
+          <Text style={s.heading}>Leave approvals</Text>
+          {!approvals.length && <Text style={s.subtitle}>No leave requests are waiting for your decision.</Text>}
+        </>}
+        {(tab === 'Approvals' ? approvals.slice().reverse() : visibleLeave).map(leave => {
           const employee = employeesById.get(leave.employee_id);
-          const ownLeave = employee?.user_id === session.user.id || employee?.email === session.user.email?.toLowerCase();
-          const canApprove = !ownLeave && (isHR || (membership?.role === 'manager' && employee?.manager_user_id === session.user.id));
-          const canCancel = isHR || employee?.user_id === session.user.id;
+          const canCancel = tab === 'Leave' && (isHR || employee?.user_id === session.user.id);
           return <View key={leave.id} style={s.card}>
             <Text style={s.heading}>{employee?.name || 'Employee'}</Text>
             <Text style={s.subtitle}>{leave.start_date} → {leave.end_date} · {leave.days} days</Text>
             <Text>{leave.reason}</Text><Text style={s.label}>{leave.status}</Text>
-            {leave.status === 'Pending' && canApprove && <View style={s.row}>
+            {leave.status === 'Pending' && canDecide(employee) && <View style={s.row}>
               <Button label="Approve" disabled={busy} onPress={() => void act(() => rpc('hr_decide_leave', { p_id: leave.id, p_approve: true }), 'Leave approved and balance updated')} />
               <Button label="Decline" disabled={busy} secondary onPress={() => void act(() => rpc('hr_decide_leave', { p_id: leave.id, p_approve: false }), 'Leave declined')} />
             </View>}
