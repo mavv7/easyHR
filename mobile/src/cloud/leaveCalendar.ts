@@ -10,6 +10,12 @@ export function isDateKey(value: string) {
   return Number.isFinite(date.getTime()) && dateKey(date) === value;
 }
 
+export function companyDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Lusaka',
+    year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  return ['year', 'month', 'day'].map(type => parts.find(part => part.type === type)?.value).join('-');
+}
+
 export function calendarMonth(month: string, offset: number) {
   const date = new Date(`${month}-01T00:00:00Z`);
   date.setUTCMonth(date.getUTCMonth() + offset);

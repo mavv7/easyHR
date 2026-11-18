@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, AppState, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
-import { calendarDays, calendarMonth, isDateKey, monthlyAgenda } from './leaveCalendar';
+import { calendarDays, calendarMonth, companyDateKey, isDateKey, monthlyAgenda } from './leaveCalendar';
+import { contractEndStatus } from './contractDates';
 import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadContracts, loadOrganizations, loadPayrollDrafts, loadSnapshot, Member, Organization, PayrollDraft, rpc, Snapshot } from './api';
 import { money, weekdays } from '../domain';
 import { AuthCover, Brand, colors, Rings, s, WorkspaceNav } from './workspaceDesign';
@@ -15,13 +16,18 @@ function Button({ label, onPress, disabled = false, secondary = false, selected 
     <Text style={[s.buttonText, secondary && s.secondaryText, selected && s.filterText]}>{label}</Text>
   </Pressable>;
 }
-function Field({ label, value, onChange, secure = false }: { label: string; value: string; onChange: (v: string) => void; secure?: boolean }) {
+function Field({ label, value, onChange, secure = false, error, inputMode }: {
+  label: string; value: string; onChange: (v: string) => void; secure?: boolean;
+  error?: string; inputMode?: 'decimal';
+}) {
   const [focused, setFocused] = useState(false);
   return <View style={{ gap: 6 }}>
     <Text style={s.label}>{label}</Text>
     <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} secureTextEntry={secure}
+      inputMode={inputMode} accessibilityHint={error}
       autoCapitalize="none" autoCorrect={false} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-      selectionColor={colors.sage} style={[s.input, focused && s.inputFocused]} />
+      selectionColor={colors.sage} style={[s.input, focused && s.inputFocused, error && s.inputError]} />
+    {!!error && <Text accessibilityRole="alert" style={s.fieldError}>{error}</Text>}
   </View>;
 }
 
@@ -585,9 +591,49 @@ function ActivityHistory({ org, snapshot, employees, user }: {
   </View>;
 }
 
+function RegisterEditor({ title, busy, children, onClose }: {
+  title: string; busy: boolean; children: React.ReactNode; onClose: () => void;
+}) {
+  const wide = useWindowDimensions().width >= 860;
+  const close = () => { if (!busy) onClose(); };
+  return <Modal visible transparent animationType="none" onRequestClose={close}>
+    <KeyboardAvoidingView style={s.drawerOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <SafeAreaView style={[s.drawer, wide && s.drawerWide]} accessibilityViewIsModal>
+        <View style={[s.drawerHeading, s.cardHeader]}>
+          <Text accessibilityRole="header" style={s.heading}>{title}</Text>
+          <Button label="Close" disabled={busy} secondary onPress={close} />
+        </View>
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.drawerContent}>{children}</ScrollView>
+      </SafeAreaView>
+    </KeyboardAvoidingView>
+  </Modal>;
+}
+
+function RegisterFeedback({ message, tone }: { message: string; tone: 'error' | 'notice' | 'loading' }) {
+  return <View style={[s.feedback, tone === 'error' && s.feedbackError]}>
+    {tone === 'loading' && <ActivityIndicator size="small" color={colors.forest} />}
+    <Text accessibilityRole={tone === 'error' ? 'alert' : undefined} accessibilityLiveRegion="polite"
+      style={[tone === 'error' ? s.error : s.subtitle, { flex: 1 }]}>{message}</Text>
+  </View>;
+}
+
+function useEditorFocus() {
+  const trigger = useRef<HTMLElement | null>(null);
+  function capture() {
+    if (Platform.OS === 'web' && document.activeElement instanceof HTMLElement) trigger.current = document.activeElement;
+  }
+  function restore() {
+    const element = trigger.current;
+    trigger.current = null;
+    if (element) setTimeout(() => { if (element.isConnected) element.focus(); }, 0);
+  }
+  return { capture, restore };
+}
+
 function useHrRegister<T>(load: () => Promise<T[]>) {
   const [records, setRecords] = useState<T[] | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const writing = useRef(false);
@@ -603,53 +649,85 @@ function useHrRegister<T>(load: () => Promise<T[]>) {
     });
     return () => { active = false; };
   }, [load, revision]);
-  function reload() {
+  function reload(keepRecords = false) {
     setError('');
-    setRecords(null);
+    if (!keepRecords) setRecords(null);
     setRevision(value => value + 1);
   }
-  async function save(work: () => Promise<unknown>) {
+  async function save(work: () => Promise<unknown>, success: string) {
     if (writing.current) return false;
     writing.current = true;
     setBusy(true);
     setError('');
-    try { await work(); reload(); return true; }
+    setNotice('');
+    try { await work(); reload(true); setNotice(success); return true; }
     catch (err) { setError((err as Error).message); return false; }
     finally { writing.current = false; setBusy(false); }
   }
-  return { records, error, busy, reload, save };
+  return { records, error, notice, busy, reload, save };
 }
 
 function ContractsRegister({ org, employees }: { org: string; employees: CloudEmployee[] }) {
   const load = useCallback(() => loadContracts(org), [org]);
-  const { records, error, busy, reload, save } = useHrRegister(load);
+  const { records, error, notice, busy, reload, save } = useHrRegister(load);
   const [editor, setEditor] = useState<Contract | 'new' | null>(null);
+  const editorFocus = useEditorFocus();
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('All');
   const names = new Map(employees.map(employee => [employee.id, employee.name]));
+  const today = companyDateKey();
+  function openEditor(value: Contract | 'new') {
+    editorFocus.capture();
+    setEditor(value);
+  }
+  function closeEditor() {
+    setEditor(null);
+    editorFocus.restore();
+  }
+  const query = search.trim().toLocaleLowerCase();
+  const contracts = (records ?? []).map(contract => ({ contract, endStatus: contractEndStatus(contract.end_date, today) }))
+    .filter(({ contract, endStatus }) => {
+      if (filter === 'Needs review' && contract.reviewed_at) return false;
+      if (filter === 'Reviewed' && !contract.reviewed_at) return false;
+      if ((filter === 'Ending soon' || filter === 'Expired') && endStatus !== filter) return false;
+      return `${contract.title} ${names.get(contract.employee_id) ?? ''}`.toLocaleLowerCase().includes(query);
+    }).sort((a, b) => b.contract.start_date.localeCompare(a.contract.start_date));
   return <View style={s.card}>
     <View style={s.cardHeader}>
       <Text accessibilityRole="header" style={s.heading}>Contract register</Text>
       <View style={s.row}>
-        <Button label="Refresh" secondary disabled={busy} onPress={reload} />
-        <Button label="Add contract" disabled={busy || !records || !employees.length} onPress={() => setEditor('new')} />
+        <Button label="Refresh" secondary disabled={busy} onPress={() => reload()} />
+        <Button label="Add contract" disabled={busy || !records || !employees.length} onPress={() => openEditor('new')} />
       </View>
     </View>
-    <Text style={s.small}>Track contract dates and internal review.</Text>
-    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-    {!records && !error && <Text style={s.subtitle}>Loading contracts…</Text>}
-    {records?.length === 0 && <Text style={s.subtitle}>No contracts recorded yet.</Text>}
-    {editor && <ContractForm key={editor === 'new' ? 'new' : editor.id} contract={editor === 'new' ? null : editor}
-      employees={employees} busy={busy} onCancel={() => setEditor(null)} onSave={async values => {
-        if (await save(() => rpc('hr_save_contract', { p_org: org, ...values }))) setEditor(null);
-      }} />}
-    {[...(records ?? [])].sort((a, b) => b.start_date.localeCompare(a.start_date)).map(contract => <View key={contract.id} style={s.nestedCard}>
+    {!!error && !editor && <RegisterFeedback message={error} tone="error" />}
+    {!!notice && <RegisterFeedback message={notice} tone="notice" />}
+    {!records && !error && <RegisterFeedback message="Loading contracts…" tone="loading" />}
+    {!!records?.length && <View style={s.toolbar}>
+      <Field label="Search contract titles or employees" value={search} onChange={setSearch} />
+      <View style={s.row}>{['All', 'Needs review', 'Reviewed', 'Ending soon', 'Expired'].map(option =>
+        <Button key={option} label={option} secondary={filter !== option} selected={filter === option} onPress={() => setFilter(option)} />)}</View>
+    </View>}
+    {records && !contracts.length && <Text style={s.subtitle}>{records.length ? 'No contracts match these filters.' : 'No contracts recorded yet. Add a contract to start the register.'}</Text>}
+    {editor && <RegisterEditor title={editor === 'new' ? 'New contract' : 'Edit contract'} busy={busy} onClose={closeEditor}>
+      {!!error && <RegisterFeedback message={error} tone="error" />}
+      <ContractForm key={editor === 'new' ? 'new' : editor.id} contract={editor === 'new' ? null : editor}
+        employees={employees} busy={busy} onCancel={closeEditor} onSave={async values => {
+          if (await save(() => rpc('hr_save_contract', { p_org: org, ...values }), 'Contract saved.')) closeEditor();
+        }} />
+    </RegisterEditor>}
+    {contracts.map(({ contract, endStatus }) => <View key={contract.id} style={s.nestedCard}>
       <View style={s.cardHeader}><Text style={s.label}>{contract.title}</Text>
-        <StatusPill label={contract.reviewed_at ? 'Reviewed' : 'Needs review'} tone={contract.reviewed_at ? 'positive' : 'pending'} />
+        <View style={s.row}>
+          {!!endStatus && <StatusPill label={endStatus} tone={endStatus === 'Expired' ? 'neutral' : 'pending'} />}
+          <StatusPill label={contract.reviewed_at ? 'Reviewed' : 'Needs review'} tone={contract.reviewed_at ? 'positive' : 'pending'} />
+        </View>
       </View>
       <Text style={s.subtitle}>{names.get(contract.employee_id) ?? 'Employee'} · {contract.start_date}{contract.end_date ? ` to ${contract.end_date}` : ''}</Text>
       {contract.reviewed_at && <Text style={s.small}>Internally reviewed {new Date(contract.reviewed_at).toLocaleDateString()}</Text>}
       <View style={s.row}>
-        <Button label="Edit" secondary disabled={busy || (editor !== 'new' && editor?.id === contract.id)} onPress={() => setEditor(contract)} />
-        {!contract.reviewed_at && <Button label="Mark reviewed" disabled={busy} onPress={() => void save(() => rpc('hr_review_contract', { p_org: org, p_id: contract.id, p_version: contract.version }))} />}
+        <Button label="Edit" secondary disabled={busy} onPress={() => openEditor(contract)} />
+        {!contract.reviewed_at && <Button label="Mark reviewed" disabled={busy} onPress={() => void save(() => rpc('hr_review_contract', { p_org: org, p_id: contract.id, p_version: contract.version }), 'Internal review recorded.')} />}
       </View>
     </View>)}
   </View>;
@@ -660,77 +738,117 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
   const [title, setTitle] = useState(contract?.title ?? '');
   const [start, setStart] = useState(contract?.start_date ?? '');
   const [end, setEnd] = useState(contract?.end_date ?? '');
-  const [error, setError] = useState('');
+  const [employeeSearch, setEmployeeSearch] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const name = title.trim(), from = start.trim(), through = end.trim();
+  const length = Array.from(name).length;
+  const validTitle = length >= 2 && length <= 120;
+  const validStart = isDateKey(from);
+  const validEnd = !through || (isDateKey(through) && (!validStart || through >= from));
+  const matchingEmployees = employees.filter(entry => entry.name.toLocaleLowerCase().includes(employeeSearch.trim().toLocaleLowerCase()));
   function submit() {
-    const name = title.trim(), from = start.trim(), through = end.trim();
-    const length = Array.from(name).length;
-    if (!employee || length < 2 || length > 120 || !isDateKey(from) || (through && (!isDateKey(through) || through < from))) {
-      setError('Choose an employee, enter a title of 2 to 120 characters, and check the contract dates.');
-      return;
-    }
-    setError('');
+    setSubmitted(true);
+    if (!employee || !validTitle || !validStart || !validEnd) return;
     void onSave({ p_employee: employee, p_title: name, p_start: from, p_end: through || null, p_id: contract?.id ?? null, p_version: contract?.version ?? null });
   }
   return <View style={s.form}>
-    <Text style={s.heading}>{contract ? 'Edit contract' : 'New contract'}</Text>
-    {!contract && <View style={s.row}>{employees.map(entry => <Button key={entry.id} label={entry.name}
-      selected={employee === entry.id} secondary={employee !== entry.id} disabled={busy} onPress={() => setEmployee(entry.id)} />)}</View>}
-    <Field label="Contract title" value={title} onChange={setTitle} />
-    <Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} />
-    <Field label="End date (optional, YYYY-MM-DD)" value={end} onChange={setEnd} />
+    {!contract && <>
+      <Field label="Find an employee" value={employeeSearch} onChange={setEmployeeSearch} />
+      <View style={s.row}>{matchingEmployees.map(entry => <Button key={entry.id} label={entry.name}
+        selected={employee === entry.id} secondary={employee !== entry.id} disabled={busy} onPress={() => setEmployee(entry.id)} />)}</View>
+      {!matchingEmployees.length && <Text style={s.small}>No employees match your search.</Text>}
+      {submitted && !employee && <Text accessibilityRole="alert" style={s.error}>Choose an employee.</Text>}
+    </>}
+    <Field label="Contract title" value={title} onChange={setTitle} error={submitted && !validTitle ? 'Enter 2 to 120 characters.' : undefined} />
+    <Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} error={submitted && !validStart ? 'Enter a valid start date.' : undefined} />
+    <Field label="End date (optional, YYYY-MM-DD)" value={end} onChange={setEnd} error={submitted && !validEnd ? 'Enter a valid date on or after the start date.' : undefined} />
     {contract?.reviewed_at && <Text style={s.small}>Saving changes returns the contract to internal review.</Text>}
-    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-    <View style={s.row}><Button label="Save contract" disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
+    <View style={s.row}><Button label={busy ? 'Saving…' : 'Save contract'} disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
   </View>;
 }
 
 function PayrollRegister({ org, employees }: { org: string; employees: CloudEmployee[] }) {
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Lusaka', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
-  const [period, setPeriod] = useState(['year', 'month'].map(type => parts.find(part => part.type === type)?.value).join('-'));
+  const [period, setPeriod] = useState(() => companyDateKey().slice(0, 7));
   const [periodInput, setPeriodInput] = useState(period);
   const [error, setError] = useState('');
-  function openPeriod() {
-    const month = periodInput.trim();
+  function openPeriod(month: string) {
     if (!isDateKey(`${month}-01`)) { setError('Enter a month in YYYY-MM format.'); return; }
     setError('');
+    setPeriodInput(month);
     setPeriod(month);
   }
   return <View style={s.card}>
-    <Text style={s.heading}>Payroll drafts</Text>
+    <Text accessibilityRole="header" style={s.heading}>Payroll drafts</Text>
     <Text style={s.small}>Enter monthly gross amounts in ZMW for review before processing payroll.</Text>
-    <Field label="Payroll month (YYYY-MM)" value={periodInput} onChange={setPeriodInput} />
-    <Button label="Open month" secondary onPress={openPeriod} />
-    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    <View style={s.toolbar}>
+      <View style={s.row}>
+        <Button label="Previous month" secondary onPress={() => openPeriod(calendarMonth(period, -1))} />
+        <Button label="Current month" secondary onPress={() => openPeriod(companyDateKey().slice(0, 7))} />
+        <Button label="Next month" secondary onPress={() => openPeriod(calendarMonth(period, 1))} />
+      </View>
+      <View style={s.row}>
+        <View style={s.periodEntry}><Field label="Payroll month (YYYY-MM)" value={periodInput} onChange={value => { setPeriodInput(value); setError(''); }} error={error} /></View>
+        <Button label="Open month" secondary onPress={() => openPeriod(periodInput.trim())} />
+      </View>
+    </View>
     <PayrollMonth key={period} org={org} period={period} employees={employees} />
   </View>;
 }
 
 function PayrollMonth({ org, period, employees }: { org: string; period: string; employees: CloudEmployee[] }) {
   const load = useCallback(() => loadPayrollDrafts(org, `${period}-01`), [org, period]);
-  const { records, error, busy, reload, save } = useHrRegister(load);
+  const { records, error, notice, busy, reload, save } = useHrRegister(load);
   const [selected, setSelected] = useState<{ employeeId: string; draft?: PayrollDraft } | null>(null);
+  const editorFocus = useEditorFocus();
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('All employees');
   const drafts = new Map(records?.map(draft => [draft.employee_id, draft]));
   const editor = employees.find(employee => employee.id === selected?.employeeId);
+  function closeEditor() {
+    setSelected(null);
+    editorFocus.restore();
+  }
   const gross = records?.reduce((total, draft) => total + draft.base_minor + draft.additional_minor, 0) ?? 0;
+  const month = new Date(`${period}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const query = search.trim().toLocaleLowerCase();
+  const visibleEmployees = employees.filter(employee => {
+    if (filter === 'Needs draft' && drafts.has(employee.id)) return false;
+    if (filter === 'Entered' && !drafts.has(employee.id)) return false;
+    return `${employee.name} ${employee.department}`.toLocaleLowerCase().includes(query);
+  });
   return <>
-    <View style={s.row}><Text style={s.heading}>{period}</Text><Button label="Refresh drafts" secondary disabled={busy} onPress={reload} /></View>
-    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-    {!records && !error && <Text style={s.subtitle}>Loading payroll drafts…</Text>}
+    <View style={s.cardHeader}><Text style={s.heading}>{month}</Text><Button label="Refresh drafts" secondary disabled={busy} onPress={() => reload()} /></View>
+    {!!error && !editor && <RegisterFeedback message={error} tone="error" />}
+    {!!notice && <RegisterFeedback message={notice} tone="notice" />}
+    {!records && !error && <RegisterFeedback message="Loading payroll drafts…" tone="loading" />}
     {records && <View style={s.metrics}>
       <View style={s.metric}><Text style={s.label}>Draft gross total</Text><Text style={s.metricValue}>{money(gross)}</Text></View>
       <View style={s.metric}><Text style={s.label}>Employee drafts</Text><Text style={s.metricValue}>{records.length} / {employees.length}</Text></View>
     </View>}
-    {editor && selected && <PayrollForm key={editor.id} employee={editor} draft={selected.draft} busy={busy} onCancel={() => setSelected(null)}
+    {!!records && !!employees.length && <View style={s.toolbar}>
+      <Field label="Search employees or departments" value={search} onChange={setSearch} />
+      <View style={s.row}>{['All employees', 'Needs draft', 'Entered'].map(option => <Button key={option} label={option}
+        selected={filter === option} secondary={filter !== option} onPress={() => setFilter(option)} />)}</View>
+    </View>}
+    {records && !visibleEmployees.length && <Text style={s.subtitle}>{employees.length ? 'No employees match these filters.' : 'Add employees in People to prepare payroll drafts.'}</Text>}
+    {editor && selected && <RegisterEditor title={selected.draft ? 'Edit payroll draft' : 'New payroll draft'} busy={busy} onClose={closeEditor}>
+      <Text style={s.subtitle}>{month}</Text>
+      {!!error && <RegisterFeedback message={error} tone="error" />}
+      <PayrollForm key={editor.id} employee={editor} draft={selected.draft} busy={busy} onCancel={closeEditor}
       onSave={async values => {
-        if (await save(() => rpc('hr_save_payroll_draft', { p_org: org, p_period: `${period}-01`, ...values }))) setSelected(null);
-      }} />}
-    {records && employees.map(employee => {
+        if (await save(() => rpc('hr_save_payroll_draft', { p_org: org, p_period: `${period}-01`, ...values }), 'Payroll draft saved.')) closeEditor();
+      }} />
+    </RegisterEditor>}
+    {records && visibleEmployees.map(employee => {
       const draft = drafts.get(employee.id);
       return <View key={employee.id} style={s.listItem}>
-        <View style={{ flex: 1 }}><Text style={s.label}>{employee.name}</Text>
+        <View style={{ flex: 1, gap: 4 }}><Text style={s.label}>{employee.name}</Text><Text style={s.small}>{employee.department}</Text>
           {draft ? <Text style={s.subtitle}>{money(draft.base_minor + draft.additional_minor)}</Text> : <StatusPill label="Draft needed" tone="pending" />}
         </View>
-        <Button label={draft ? 'Edit draft' : 'Add draft'} secondary disabled={busy || selected?.employeeId === employee.id} onPress={() => setSelected({ employeeId: employee.id, draft })} />
+        <Button label={draft ? 'Edit draft' : 'Add draft'} secondary disabled={busy} onPress={() => {
+          editorFocus.capture();
+          setSelected({ employeeId: employee.id, draft });
+        }} />
       </View>;
     })}
   </>;
@@ -746,23 +864,20 @@ function parsePayrollAmount(value: string) {
 function PayrollForm({ employee, draft, busy, onCancel, onSave }: SaveForm & { employee: CloudEmployee; draft?: PayrollDraft }) {
   const [base, setBase] = useState(draft ? (draft.base_minor / 100).toFixed(2) : '');
   const [additional, setAdditional] = useState(draft ? (draft.additional_minor / 100).toFixed(2) : '0');
-  const [error, setError] = useState('');
+  const [submitted, setSubmitted] = useState(false);
   const baseMinor = parsePayrollAmount(base), additionalMinor = parsePayrollAmount(additional);
+  const amountError = 'Enter 0 to 10,000,000 ZMW with up to two decimal places.';
   function submit() {
-    if (baseMinor === null || additionalMinor === null) {
-      setError('Enter amounts from 0 to 10,000,000 ZMW with up to two decimal places.');
-      return;
-    }
-    setError('');
+    setSubmitted(true);
+    if (baseMinor === null || additionalMinor === null) return;
     void onSave({ p_employee: employee.id, p_base: baseMinor, p_additional: additionalMinor, p_version: draft?.version ?? null });
   }
   return <View style={s.form}>
     <Text style={s.heading}>{employee.name}</Text>
-    <Field label="Base pay (ZMW)" value={base} onChange={setBase} />
-    <Field label="Additional gross pay (ZMW)" value={additional} onChange={setAdditional} />
+    <Field label="Base pay (ZMW)" value={base} onChange={setBase} inputMode="decimal" error={submitted && baseMinor === null ? amountError : undefined} />
+    <Field label="Additional gross pay (ZMW)" value={additional} onChange={setAdditional} inputMode="decimal" error={submitted && additionalMinor === null ? amountError : undefined} />
     {baseMinor !== null && additionalMinor !== null && <Text style={s.label}>{money(baseMinor + additionalMinor)} draft gross pay</Text>}
-    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
-    <View style={s.row}><Button label="Save draft" disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
+    <View style={s.row}><Button label={busy ? 'Saving…' : 'Save draft'} disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
   </View>;
 }
 
@@ -928,10 +1043,7 @@ function AccountSettings({ busy, onPasswordChange, onEndOtherSessions }: {
 }
 
 function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employees: Map<string, CloudEmployee> }) {
-  const dayParts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Africa/Lusaka', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date());
-  const today = ['year', 'month', 'day'].map(type => dayParts.find(part => part.type === type)?.value).join('-');
+  const today = companyDateKey();
   const [selected, setSelected] = useState(today);
   const [view, setView] = useState<'Day' | 'Month'>('Day');
   const [status, setStatus] = useState<'All' | 'Pending' | 'Approved'>('All');

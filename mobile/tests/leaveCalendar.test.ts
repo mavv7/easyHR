@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { CloudLeave } from '../src/cloud/api.ts';
-import { calendarDays, calendarMonth, isDateKey, monthlyAgenda } from '../src/cloud/leaveCalendar.ts';
+import { calendarDays, calendarMonth, companyDateKey, isDateKey, monthlyAgenda } from '../src/cloud/leaveCalendar.ts';
+import { contractEndStatus } from '../src/cloud/contractDates.ts';
 
 test('leave calendar aligns Monday-first weeks and handles leap days and year changes', () => {
   const days = calendarDays('2028-02', []);
@@ -14,6 +15,16 @@ test('leave calendar aligns Monday-first weeks and handles leap days and year ch
   assert.equal(isDateKey('2028-02-29'), true);
   assert.equal(isDateKey('2027-02-29'), false);
   assert.equal(isDateKey('2028-2-29'), false);
+});
+
+test('contract expiry flags use the company date and a 30-day inclusive window', () => {
+  const today = companyDateKey(new Date('2028-01-31T22:00:00Z'));
+  assert.equal(today, '2028-02-01');
+  assert.equal(contractEndStatus(null, today), null);
+  assert.equal(contractEndStatus('2028-01-31', today), 'Expired');
+  assert.equal(contractEndStatus(today, today), 'Ending soon');
+  assert.equal(contractEndStatus('2028-03-02', today), 'Ending soon');
+  assert.equal(contractEndStatus('2028-03-03', today), null);
 });
 
 test('leave calendar shows pending and approved requests across months on weekdays', () => {

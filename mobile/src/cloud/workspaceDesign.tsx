@@ -59,6 +59,17 @@ export const s = StyleSheet.create({
   badgePending: { backgroundColor: '#F0E4D4' },
   badgePendingText: { color: '#79472C' },
   badgeNeutral: { backgroundColor: '#ECEAE2' },
+  drawerOverlay: { flex: 1, backgroundColor: '#122F2870', alignItems: 'flex-end' },
+  drawer: { width: '100%', flex: 1, backgroundColor: colors.paper },
+  drawerWide: { maxWidth: 540, borderLeftWidth: 1, borderColor: colors.line },
+  drawerHeading: { paddingHorizontal: 21, paddingVertical: 16, borderBottomWidth: 1, borderColor: colors.line },
+  drawerContent: { padding: 21, paddingBottom: 32, gap: 14 },
+  feedback: { padding: 13, borderRadius: 10, backgroundColor: colors.sage, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  feedbackError: { backgroundColor: '#FAECE6' },
+  inputError: { borderColor: colors.error },
+  fieldError: { color: colors.error, fontSize: 12, lineHeight: 17 },
+  toolbar: { padding: 13, borderRadius: 12, backgroundColor: '#F1F2E9', gap: 12 },
+  periodEntry: { flexBasis: 220, flexGrow: 1 },
 });
 
 const marks: Record<string, string> = {
