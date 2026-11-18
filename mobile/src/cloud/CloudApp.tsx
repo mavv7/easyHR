@@ -181,6 +181,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(true), [message, setMessage] = useState('');
   const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [showAccess, setShowAccess] = useState(false), [search, setSearch] = useState('');
   const [showAccount, setShowAccount] = useState(false);
+  const [profileId, setProfileId] = useState<string | null>(null);
   const [leaveStatus, setLeaveStatus] = useState<(typeof leaveStatuses)[number]>('All');
   const [leaveSearch, setLeaveSearch] = useState('');
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
@@ -211,6 +212,11 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const currentName = organizations.find(o => o.id === org)?.name;
   const eligible = snapshot.employees.filter(e => isHR || e.user_id === session.user.id);
   const employeesById = new Map(snapshot.employees.map(employee => [employee.id, employee]));
+  const profile = profileId ? employeesById.get(profileId) : undefined;
+  const peopleQuery = search.trim().toLocaleLowerCase();
+  const visiblePeople = tab === 'People' && !profile ? snapshot.employees.filter(employee =>
+    `${employee.name} ${employee.department} ${employee.job_title} ${employee.email}`.toLocaleLowerCase().includes(peopleQuery),
+  ) : [];
   const leaveQuery = leaveSearch.trim().toLocaleLowerCase();
   const visibleLeave = tab === 'Leave' ? snapshot.leave.filter(leave => {
     if (leaveStatus !== 'All' && leave.status !== leaveStatus) return false;
@@ -245,6 +251,8 @@ function CompanyWorkspace({ session }: { session: Session }) {
         generation.current++;
         setSnapshot(emptySnapshot);
         setEditor(null);
+        setProfileId(null);
+        setSearch('');
         setShowLeave(false);
         setShowAccess(false);
         setLeaveSearch('');
@@ -252,9 +260,27 @@ function CompanyWorkspace({ session }: { session: Session }) {
         setOrg(o.id);
       }} />)}</View>}
       <View style={s.row}>{['People', 'Leave', 'Calendar', ...(isHR ? ['Activity', 'Workspace'] : [])].map(t => <Button key={t} label={t} selected={tab === t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
-      {tab === 'People' && <View style={s.card}><View style={s.row}><Text style={s.heading}>People · {snapshot.employees.length}</Text>{isHR && <Button label="Add employee" disabled={busy} onPress={() => setEditor('new')} />}</View><Field label="Search people" value={search} onChange={setSearch} />
+      {tab === 'People' && <View style={s.card}>
+        {profile ? <View style={s.row}>
+          <Button label="Back to people" disabled={busy} secondary onPress={() => { setEditor(null); setProfileId(null); }} />
+          {isHR && <Button label="Edit employee" disabled={busy} onPress={() => setEditor(profile)} />}
+        </View> : <>
+          <View style={s.row}><Text style={s.heading}>People · {snapshot.employees.length}</Text>{isHR && <Button label="Add employee" disabled={busy} onPress={() => setEditor('new')} />}</View>
+          <Field label="Search people" value={search} onChange={setSearch} />
+        </>}
         {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} employee={editor} snapshot={snapshot} busy={busy} onCancel={() => setEditor(null)} onSave={async values => { const ok = await act(() => rpc('hr_save_employee', { p_organization_id: org, ...values }), 'Employee saved'); if (ok) setEditor(null); }} />}
-        {snapshot.employees.filter(e => `${e.name} ${e.department} ${e.job_title}`.toLowerCase().includes(search.toLowerCase())).map(e => <View key={e.id} style={s.listItem}><View style={{ flex: 1, gap: 5 }}><Text style={s.heading}>{e.name}</Text><Text style={s.subtitle}>{e.job_title} · {e.department}</Text><Text style={s.small}>{e.email}</Text><Text style={s.label}>{e.leave_balance} days available · {e.user_id ? 'Account linked' : 'Account not linked'}</Text></View>{isHR && <Button label="Edit" secondary disabled={busy} onPress={() => setEditor(e)} />}</View>)}
+        {profile && <EmployeeProfile employee={profile} employees={snapshot.employees} requests={snapshot.leave} />}
+        {visiblePeople.map(employee => <View key={employee.id} style={s.listItem}>
+          <Pressable accessibilityRole="button" accessibilityLabel={`View ${employee.name}'s profile`}
+            disabled={busy} onPress={() => { setEditor(null); setProfileId(employee.id); }} style={{ flex: 1, gap: 5 }}>
+            <Text style={s.heading}>{employee.name}</Text>
+            <Text style={s.subtitle}>{employee.job_title} · {employee.department}</Text>
+            <Text style={s.small}>{employee.email}</Text>
+            <Text style={s.label}>View profile</Text>
+          </Pressable>
+          {isHR && <Button label="Edit" secondary disabled={busy} onPress={() => setEditor(employee)} />}
+        </View>)}
+        {!profile && !!snapshot.employees.length && !visiblePeople.length && <Text style={s.subtitle}>No employees match your search.</Text>}
         {!snapshot.employees.length && <Text style={s.subtitle}>{isHR ? 'Add your first employee to get started.' : 'No employee records are assigned to your account yet.'}</Text>}
       </View>}
       {tab === 'Leave' && <View style={s.card}><Text style={s.heading}>Leave requests</Text><Text style={s.small}>Current policy: whole weekdays only. Public holidays and statutory accrual are not configured. Pending requests reserve available days.</Text><Button label="Request leave" disabled={busy || !eligible.length} onPress={() => setShowLeave(true)} />
@@ -328,6 +354,35 @@ function EmployeeForm({ employee, snapshot, busy, onCancel, onSave }: SaveForm &
   }
   return <View style={s.form}><Text style={s.heading}>{e ? 'Edit employee' : 'New employee'}</Text><Field label="Full name" value={name} onChange={setName} /><Field label="Job title" value={job} onChange={setJob} /><Field label="Department" value={department} onChange={setDepartment} /><Field label="Work email" value={email} onChange={setEmail} /><Field label="Available leave days" value={balance} onChange={setBalance} /><Text style={s.label}>Approving manager</Text><View style={s.row}><Button label="No manager" secondary={manager !== null} onPress={() => setManager(null)} />{snapshot.members.filter(m => ['hr', 'manager'].includes(m.role) && m.user_id !== e?.user_id).map(m => <Button key={m.user_id} label={snapshot.employees.find(e => e.user_id === m.user_id)?.name || `${m.role}: ${m.user_id.slice(0, 8)}`} secondary={manager !== m.user_id} onPress={() => setManager(m.user_id)} />)}</View>{!!error && <Text style={s.error}>{error}</Text>}<View style={s.row}><Button label="Save employee" disabled={busy} onPress={save} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
 }
+function EmployeeProfile({ employee, employees, requests }: { employee: CloudEmployee; employees: CloudEmployee[]; requests: CloudLeave[] }) {
+  const manager = employees.find(entry => entry.user_id && entry.user_id === employee.manager_user_id);
+  const employeeRequests = requests.filter(request => request.employee_id === employee.id);
+  const reserved = employeeRequests.reduce((total, request) => request.status === 'Pending' ? total + request.days : total, 0);
+  return <>
+    <View style={s.form}>
+      <Text style={s.heading}>{employee.name}</Text>
+      <Text style={s.subtitle}>{employee.job_title} · {employee.department}</Text>
+      <Text selectable style={s.label}>{employee.email}</Text>
+      <Text style={s.small}>{employee.user_id ? 'Account linked' : 'Account not linked'}</Text>
+      <Text style={s.label}>Approving manager</Text>
+      <Text style={s.subtitle}>{manager?.name ?? (employee.manager_user_id ? 'Manager assigned' : 'No manager assigned')}</Text>
+    </View>
+    <View style={s.form}>
+      <Text style={s.heading}>Leave balance</Text>
+      <Text style={s.subtitle}>{employee.leave_balance} days in balance · {reserved} reserved</Text>
+      <Text style={s.label}>{Math.max(0, employee.leave_balance - reserved)} days available to request</Text>
+    </View>
+    <Text style={s.heading}>Recent leave requests</Text>
+    {!employeeRequests.length && <Text style={s.subtitle}>No leave requests yet.</Text>}
+    {employeeRequests.slice(0, 5).map(request => <View key={request.id} style={s.listItem}>
+      <View>
+        <Text style={s.label}>{request.status} · {request.days} {request.days === 1 ? 'day' : 'days'}</Text>
+        <Text style={s.small}>{request.start_date} to {request.end_date}</Text>
+      </View>
+    </View>)}
+  </>;
+}
+
 function LeaveForm({ employees, requests, busy, onCancel, onSave }: SaveForm & { employees: CloudEmployee[]; requests: CloudLeave[] }) {
   const [employeeId, setEmployeeId] = useState(employees[0]?.id || '');
   const [start, setStart] = useState(''), [end, setEnd] = useState('');
