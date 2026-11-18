@@ -183,14 +183,17 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const [showAccount, setShowAccount] = useState(false);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [departmentFilter, setDepartmentFilter] = useState('');
+  const [peopleSort, setPeopleSort] = useState<'Name' | 'Department'>('Name');
   const [leaveStatus, setLeaveStatus] = useState<(typeof leaveStatuses)[number]>('All');
   const [leaveSearch, setLeaveSearch] = useState('');
+  const [leaveEmployee, setLeaveEmployee] = useState<string | null>(null);
+  const [approvalSearch, setApprovalSearch] = useState('');
   const [leaveFrom, setLeaveFrom] = useState('');
   const [leaveThrough, setLeaveThrough] = useState('');
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
   const params = useLocalSearchParams<{ cloudtab?: string }>();
   const membership = snapshot.members.find(m => m.user_id === session.user.id), isHR = membership?.role === 'hr';
-  const tabs = ['People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Activity', 'Workspace'] : [])];
+  const tabs = ['Overview', 'People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Activity', 'Workspace'] : [])];
   const tab = tabs.find(name => name === params.cloudtab) ?? 'People';
   const refresh = useCallback(async () => {
     const ticket = ++generation.current;
@@ -216,6 +219,17 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const currentName = organizations.find(o => o.id === org)?.name;
   const eligible = snapshot.employees.filter(e => isHR || e.user_id === session.user.id);
   const employeesById = new Map(snapshot.employees.map(employee => [employee.id, employee]));
+  function matchesRequest(leave: CloudLeave, query: string) {
+    return !query || [
+      employeesById.get(leave.employee_id)?.name, leave.start_date, leave.end_date, leave.reason,
+    ].some(value => value?.toLocaleLowerCase().includes(query));
+  }
+  function openTab(name: string) {
+    setEditor(null);
+    setShowLeave(false);
+    setShowAccess(false);
+    router.setParams({ cloudtab: name });
+  }
   const userEmail = session.user.email?.toLowerCase();
   function canDecide(employee: CloudEmployee | undefined) {
     return !!employee && employee.user_id !== session.user.id && employee.email !== userEmail &&
@@ -224,25 +238,25 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const approvals = tabs.includes('Approvals')
     ? snapshot.leave.filter(leave => leave.status === 'Pending' && canDecide(employeesById.get(leave.employee_id)))
     : [];
+  const approvalQuery = approvalSearch.trim().toLocaleLowerCase();
+  const visibleApprovals = tab === 'Approvals'
+    ? approvals.filter(leave => matchesRequest(leave, approvalQuery)).reverse()
+    : [];
   const profile = profileId ? employeesById.get(profileId) : undefined;
   const peopleQuery = search.trim().toLocaleLowerCase();
   const departmentQuery = departmentFilter.trim().toLocaleLowerCase();
   const visiblePeople = tab === 'People' && !profile ? snapshot.employees.filter(employee =>
     employee.department.toLocaleLowerCase().includes(departmentQuery) &&
     `${employee.name} ${employee.department} ${employee.job_title} ${employee.email}`.toLocaleLowerCase().includes(peopleQuery),
-  ) : [];
+  ).sort((a, b) => (peopleSort === 'Department' ? a.department.localeCompare(b.department) : 0) || a.name.localeCompare(b.name)) : [];
   const leaveQuery = leaveSearch.trim().toLocaleLowerCase();
   const from = leaveFrom.trim(), through = leaveThrough.trim();
   const validRange = (!from || isDateKey(from)) && (!through || isDateKey(through)) && (!from || !through || from <= through);
   const visibleLeave = tab === 'Leave' ? snapshot.leave.filter(leave => {
+    if (leaveEmployee && leave.employee_id !== leaveEmployee) return false;
     if (leaveStatus !== 'All' && leave.status !== leaveStatus) return false;
     if (validRange && (leave.end_date < from || (through && leave.start_date > through))) return false;
-    return !leaveQuery || [
-      employeesById.get(leave.employee_id)?.name,
-      leave.start_date,
-      leave.end_date,
-      leave.reason,
-    ].some(value => value?.toLocaleLowerCase().includes(leaveQuery));
+    return matchesRequest(leave, leaveQuery);
   }) : [];
   return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
     <View style={s.row}><View style={{ flex: 1 }}><Text style={s.logo}>easy<Text style={{ color: '#ED631C' }}>HR.</Text></Text><Text style={s.subtitle}>{currentName || 'Your workspace'} · Zambia · ZMW</Text></View><Button label="Sign out" disabled={busy} secondary onPress={() => void act(async () => { const { error } = await supabase!.auth.signOut({ scope: 'local' }); if (error) throw error; }, 'Signed out')} /></View>
@@ -274,12 +288,20 @@ function CompanyWorkspace({ session }: { session: Session }) {
         setShowLeave(false);
         setShowAccess(false);
         setLeaveSearch('');
+        setLeaveEmployee(null);
+        setApprovalSearch('');
         setLeaveStatus('All');
         setLeaveFrom('');
         setLeaveThrough('');
         setOrg(o.id);
       }} />)}</View>}
-      <View style={s.row}>{tabs.map(t => <Button key={t} label={t === 'Approvals' && approvals.length ? `Approvals (${approvals.length})` : t} selected={tab === t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
+      <View style={s.row}>{tabs.map(t => <Button key={t} label={t === 'Approvals' && approvals.length ? `Approvals (${approvals.length})` : t} selected={tab === t} secondary={tab !== t} onPress={() => openTab(t)} />)}</View>
+      {tab === 'Overview' && <WorkspaceOverview snapshot={snapshot} approvalCount={approvals.length} canApprove={tabs.includes('Approvals')}
+        userId={session.user.id} openTab={name => {
+          if (name === 'People') setProfileId(null);
+          if (name === 'Leave') setLeaveEmployee(null);
+          openTab(name);
+        }} openProfile={id => { setProfileId(id); openTab('People'); }} />}
       {tab === 'People' && <View style={s.card}>
         {profile ? <View style={s.row}>
           <Button label="Back to people" disabled={busy} secondary onPress={() => { setEditor(null); setProfileId(null); }} />
@@ -288,10 +310,20 @@ function CompanyWorkspace({ session }: { session: Session }) {
           <View style={s.row}><Text style={s.heading}>People · {snapshot.employees.length}</Text>{isHR && <Button label="Add employee" disabled={busy} onPress={() => setEditor('new')} />}</View>
           <Field label="Search people" value={search} onChange={setSearch} />
           {!!snapshot.employees.length && <Field label="Filter by department" value={departmentFilter} onChange={setDepartmentFilter} />}
+          {snapshot.employees.length > 1 && <View style={s.row}>{(['Name', 'Department'] as const).map(sort => <Button key={sort} label={`Sort by ${sort.toLowerCase()}`}
+            selected={peopleSort === sort} secondary={peopleSort !== sort} onPress={() => setPeopleSort(sort)} />)}</View>}
         </>}
         {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} employee={editor} snapshot={snapshot} busy={busy} onCancel={() => setEditor(null)} onSave={async values => { const ok = await act(() => rpc('hr_save_employee', { p_organization_id: org, ...values }), 'Employee saved'); if (ok) setEditor(null); }} />}
         {profile && <EmployeeProfile employee={profile} employees={snapshot.employees} requests={snapshot.leave}
-          onOpenProfile={id => { setEditor(null); setProfileId(id); }} />}
+          onOpenProfile={id => { setEditor(null); setProfileId(id); }}
+          onOpenLeave={() => {
+            setLeaveEmployee(profile.id);
+            setLeaveSearch('');
+            setLeaveStatus('All');
+            setLeaveFrom('');
+            setLeaveThrough('');
+            openTab('Leave');
+          }} />}
         {visiblePeople.map(employee => <View key={employee.id} style={s.listItem}>
           <Pressable accessibilityRole="button" accessibilityLabel={`View ${employee.name}'s profile`}
             disabled={busy} onPress={() => { setEditor(null); setProfileId(employee.id); }} style={{ flex: 1, gap: 5 }}>
@@ -313,10 +345,15 @@ function CompanyWorkspace({ session }: { session: Session }) {
             setShowLeave(false);
             setLeaveStatus('Pending');
             setLeaveSearch('');
+            setLeaveEmployee(null);
             setLeaveFrom('');
             setLeaveThrough('');
           }
         }} />}
+        {leaveEmployee && <View style={s.row}>
+          <Text style={s.label}>{employeesById.get(leaveEmployee)?.name ?? 'Selected employee'}</Text>
+          <Button label="Show all employees" secondary onPress={() => setLeaveEmployee(null)} />
+        </View>}
         {!!snapshot.leave.length && <>
           <Field label="Search leave by name, date or reason" value={leaveSearch} onChange={setLeaveSearch} />
           <Field label="From date (YYYY-MM-DD)" value={leaveFrom} onChange={setLeaveFrom} />
@@ -330,9 +367,10 @@ function CompanyWorkspace({ session }: { session: Session }) {
         {!visibleLeave.length && <Text style={s.subtitle}>{snapshot.leave.length ? 'No leave requests match these filters.' : 'No leave requests yet.'}</Text>}
         </> : <>
           <Text style={s.heading}>Leave approvals</Text>
-          {!approvals.length && <Text style={s.subtitle}>No leave requests are waiting for your decision.</Text>}
+          {!!approvals.length && <Field label="Search pending approvals" value={approvalSearch} onChange={setApprovalSearch} />}
+          {!visibleApprovals.length && <Text style={s.subtitle}>{approvals.length ? 'No approvals match your search.' : 'No leave requests are waiting for your decision.'}</Text>}
         </>}
-        {(tab === 'Approvals' ? approvals.slice().reverse() : visibleLeave).map(leave => {
+        {(tab === 'Approvals' ? visibleApprovals : visibleLeave).map(leave => {
           const employee = employeesById.get(leave.employee_id);
           const canCancel = tab === 'Leave' && (isHR || employee?.user_id === session.user.id);
           return <View key={leave.id} style={s.card}>
@@ -461,11 +499,42 @@ function ActivityHistory({ snapshot, employees, user }: {
   </View>;
 }
 
-function EmployeeProfile({ employee, employees, requests, onOpenProfile }: {
+function WorkspaceOverview({ snapshot, approvalCount, canApprove, userId, openTab, openProfile }: {
+  snapshot: Snapshot;
+  approvalCount: number;
+  canApprove: boolean;
+  userId: string;
+  openTab: (tab: string) => void;
+  openProfile: (id: string) => void;
+}) {
+  const employee = snapshot.employees.find(entry => entry.user_id === userId);
+  const reserved = employee ? snapshot.leave.reduce((days, request) =>
+    request.employee_id === employee.id && request.status === 'Pending' ? days + request.days : days, 0) : 0;
+  return <View style={s.card}>
+    <Text style={s.heading}>Workspace overview</Text>
+    {canApprove && <View style={s.form}>
+      <Text style={s.label}>{approvalCount} {approvalCount === 1 ? 'request awaits' : 'requests await'} your decision</Text>
+      <Button label="Open approvals" secondary onPress={() => openTab('Approvals')} />
+    </View>}
+    {employee && <View style={s.form}>
+      <Text style={s.label}>Your leave balance</Text>
+      <Text style={s.subtitle}>{Math.max(0, employee.leave_balance - reserved)} days available · {reserved} reserved</Text>
+      <Button label="Open your profile" secondary onPress={() => openProfile(employee.id)} />
+    </View>}
+    <View style={s.row}>
+      <Button label="People directory" secondary onPress={() => openTab('People')} />
+      <Button label="Leave requests" secondary onPress={() => openTab('Leave')} />
+      <Button label="Leave calendar" secondary onPress={() => openTab('Calendar')} />
+    </View>
+  </View>;
+}
+
+function EmployeeProfile({ employee, employees, requests, onOpenProfile, onOpenLeave }: {
   employee: CloudEmployee;
   employees: CloudEmployee[];
   requests: CloudLeave[];
   onOpenProfile: (id: string) => void;
+  onOpenLeave: () => void;
 }) {
   const manager = employees.find(entry => entry.user_id && entry.user_id === employee.manager_user_id);
   const directReports = employee.user_id ? employees.filter(entry => entry.id !== employee.id && entry.manager_user_id === employee.user_id) : [];
@@ -489,7 +558,10 @@ function EmployeeProfile({ employee, employees, requests, onOpenProfile }: {
       <Text style={s.subtitle}>{employee.leave_balance} days in balance · {reserved} reserved</Text>
       <Text style={s.label}>{Math.max(0, employee.leave_balance - reserved)} days available to request</Text>
     </View>
-    <Text style={s.heading}>Recent leave requests</Text>
+    <View style={s.row}>
+      <Text style={s.heading}>Recent leave requests</Text>
+      {!!employeeRequests.length && <Button label="View all leave" secondary onPress={onOpenLeave} />}
+    </View>
     {!employeeRequests.length && <Text style={s.subtitle}>No leave requests yet.</Text>}
     {employeeRequests.slice(0, 5).map(request => <View key={request.id} style={s.listItem}>
       <View>
@@ -591,8 +663,9 @@ function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employ
   const today = ['year', 'month', 'day'].map(type => dayParts.find(part => part.type === type)?.value).join('-');
   const [selected, setSelected] = useState(today);
   const [view, setView] = useState<'Day' | 'Month'>('Day');
+  const [status, setStatus] = useState<'All' | 'Pending' | 'Approved'>('All');
   const month = selected.slice(0, 7);
-  const days = calendarDays(month, requests);
+  const days = calendarDays(month, status === 'All' ? requests : requests.filter(request => request.status === status));
   const selectedRequests = view === 'Month' ? monthlyAgenda(days) : days.find(day => day?.date === selected)?.requests ?? [];
   const monthLabel = new Date(`${month}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const dateLabel = new Date(`${selected}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -608,6 +681,9 @@ function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employ
       {(['Day', 'Month'] as const).map(option => <Button key={option} label={option === 'Month' ? 'Month agenda' : 'Day view'}
         selected={view === option} secondary={view !== option} onPress={() => setView(option)} />)}
     </View>
+    <View style={s.row}>{(['All', 'Pending', 'Approved'] as const).map(option => <Button key={option}
+      label={option === 'All' ? 'All scheduled leave' : option} selected={status === option}
+      secondary={status !== option} onPress={() => setStatus(option)} />)}</View>
     {view === 'Day' && <>
     <View style={calendarStyles.week}>
       {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(label => <Text key={label} style={calendarStyles.weekday}>{label}</Text>)}
@@ -624,7 +700,7 @@ function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employ
     </View>)}
     </>}
     <Text style={s.heading}>{view === 'Month' ? 'Monthly agenda' : dateLabel}</Text>
-    {!selectedRequests.length && <Text style={s.subtitle}>No pending or approved leave {view === 'Month' ? 'this month' : 'on this date'}.</Text>}
+    {!selectedRequests.length && <Text style={s.subtitle}>No {status === 'All' ? 'pending or approved' : status.toLowerCase()} leave {view === 'Month' ? 'this month' : 'on this date'}.</Text>}
     {selectedRequests.map(request => <View key={request.id} style={s.listItem}>
       <View>
         <Text style={s.label}>{employees.get(request.employee_id)?.name ?? 'Employee'}</Text>
