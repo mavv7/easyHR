@@ -5,7 +5,7 @@ import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth } from './leaveCalendar';
-import { CloudEmployee, CloudLeave, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
+import { Audit, CloudEmployee, CloudLeave, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
 import { weekdays } from '../domain';
 
 function Button({ label, onPress, disabled = false, secondary = false, selected }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean }) {
@@ -330,7 +330,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
         })}
       </View>}
       {tab === 'Calendar' && <LeaveCalendar key={org} requests={snapshot.leave} employees={employeesById} />}
-      {tab === 'Activity' && isHR && <View style={s.card}><Text style={s.heading}>Server activity history</Text><Text style={s.small}>Latest 100 events. Events are written by database functions and cannot be edited by app users.</Text>{snapshot.audit.map(a => <View key={a.id} style={s.listItem}><View><Text style={s.label}>{a.action}</Text><Text style={s.small}>{new Date(a.created_at).toLocaleString()}</Text><Text selectable style={s.small}>Actor: {a.actor_id}</Text><Text selectable style={s.small}>Record: {a.record_id}</Text></View></View>)}</View>}
+      {tab === 'Activity' && isHR && <ActivityHistory key={org} snapshot={snapshot} employees={employeesById} user={session.user} />}
       {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(member => <MemberAccess
         key={`${org}:${member.user_id}:${member.role}`}
         member={member}
@@ -367,6 +367,67 @@ function EmployeeForm({ employee, snapshot, busy, onCancel, onSave }: SaveForm &
   }
   return <View style={s.form}><Text style={s.heading}>{e ? 'Edit employee' : 'New employee'}</Text><Field label="Full name" value={name} onChange={setName} /><Field label="Job title" value={job} onChange={setJob} /><Field label="Department" value={department} onChange={setDepartment} /><Field label="Work email" value={email} onChange={setEmail} /><Field label="Available leave days" value={balance} onChange={setBalance} /><Text style={s.label}>Approving manager</Text><View style={s.row}><Button label="No manager" secondary={manager !== null} onPress={() => setManager(null)} />{snapshot.members.filter(m => ['hr', 'manager'].includes(m.role) && m.user_id !== e?.user_id).map(m => <Button key={m.user_id} label={snapshot.employees.find(e => e.user_id === m.user_id)?.name || `${m.role}: ${m.user_id.slice(0, 8)}`} secondary={manager !== m.user_id} onPress={() => setManager(m.user_id)} />)}</View>{!!error && <Text style={s.error}>{error}</Text>}<View style={s.row}><Button label="Save employee" disabled={busy} onPress={save} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
 }
+const activityLabels: Record<string, string> = {
+  'organization.created': 'Company workspace created',
+  'employee.created': 'Employee added',
+  'employee.updated': 'Employee updated',
+  'leave.requested': 'Leave requested',
+  'leave.approved': 'Leave approved',
+  'leave.declined': 'Leave declined',
+  'leave.cancelled': 'Leave cancelled',
+  'member.added.hr': 'HR access granted',
+  'member.added.manager': 'Manager access granted',
+  'member.added.employee': 'Employee access granted',
+  'member.role_changed.hr': 'Role changed to HR',
+  'member.role_changed.manager': 'Role changed to manager',
+  'member.role_changed.employee': 'Role changed to employee',
+  'member.revoked': 'Workspace access revoked',
+  'invitation.cancelled': 'Pending authorization withdrawn',
+};
+
+function ActivityHistory({ snapshot, employees, user }: {
+  snapshot: Snapshot;
+  employees: Map<string, CloudEmployee>;
+  user: Session['user'];
+}) {
+  const [search, setSearch] = useState('');
+  const query = search.trim().toLocaleLowerCase();
+  const employeesByUser = new Map(snapshot.employees.map(employee => [employee.user_id, employee.name]));
+  const leaveById = new Map(snapshot.leave.map(leave => [leave.id, leave]));
+  function userName(userId: string) {
+    return employeesByUser.get(userId) ?? (userId === user.id ? user.email : undefined);
+  }
+  function subject(event: Audit) {
+    if (!event.record_id) return undefined;
+    const kind = event.action.split('.')[0];
+    if (kind === 'employee' || kind === 'invitation') return employees.get(event.record_id)?.name;
+    if (kind === 'member') return userName(event.record_id);
+    if (kind === 'leave') {
+      const leave = leaveById.get(event.record_id);
+      return leave && employees.get(leave.employee_id)?.name;
+    }
+  }
+  const events = snapshot.audit.map(event => ({
+    event, label: activityLabels[event.action] ?? event.action, actor: userName(event.actor_id), subject: subject(event),
+  })).filter(({ event, label, actor, subject }) =>
+    [event.action, event.actor_id, event.record_id, label, actor, subject].some(value => value?.toLocaleLowerCase().includes(query)),
+  );
+  return <View style={s.card}>
+    <Text style={s.heading}>Activity history</Text>
+    <Text style={s.small}>Latest 100 events</Text>
+    {!!snapshot.audit.length && <Field label="Search activity" value={search} onChange={setSearch} />}
+    {!events.length && <Text style={s.subtitle}>{snapshot.audit.length ? 'No events match your search.' : 'No activity recorded yet.'}</Text>}
+    {events.map(({ event, label, actor, subject }) => <View key={event.id} style={s.listItem}>
+      <View style={{ flex: 1 }}>
+        <Text style={s.label}>{label}</Text>
+        <Text style={s.small}>{new Date(event.created_at).toLocaleString()}</Text>
+        <Text selectable style={s.small}>Actor: {actor ? `${actor} · ${event.actor_id}` : event.actor_id}</Text>
+        {!!event.record_id && <Text selectable style={s.small}>Record: {subject ? `${subject} · ${event.record_id}` : event.record_id}</Text>}
+      </View>
+    </View>)}
+  </View>;
+}
+
 function EmployeeProfile({ employee, employees, requests }: { employee: CloudEmployee; employees: CloudEmployee[]; requests: CloudLeave[] }) {
   const manager = employees.find(entry => entry.user_id && entry.user_id === employee.manager_user_id);
   const employeeRequests = requests.filter(request => request.employee_id === employee.id);
