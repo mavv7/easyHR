@@ -4,6 +4,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
+import { calendarDays, calendarMonth } from './leaveCalendar';
 import { CloudEmployee, CloudLeave, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
 import { weekdays } from '../domain';
 
@@ -184,7 +185,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
   const [leaveSearch, setLeaveSearch] = useState('');
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
   const params = useLocalSearchParams<{ cloudtab?: string }>();
-  const tab = ['People', 'Leave', 'Activity', 'Workspace'].includes(params.cloudtab || '') ? params.cloudtab! : 'People';
+  const tab = ['People', 'Leave', 'Calendar', 'Activity', 'Workspace'].includes(params.cloudtab || '') ? params.cloudtab! : 'People';
   const membership = snapshot.members.find(m => m.user_id === session.user.id), isHR = membership?.role === 'hr';
   const refresh = useCallback(async () => {
     const ticket = ++generation.current;
@@ -250,7 +251,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
         setLeaveStatus('All');
         setOrg(o.id);
       }} />)}</View>}
-      <View style={s.row}>{['People', 'Leave', ...(isHR ? ['Activity', 'Workspace'] : [])].map(t => <Button key={t} label={t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
+      <View style={s.row}>{['People', 'Leave', 'Calendar', ...(isHR ? ['Activity', 'Workspace'] : [])].map(t => <Button key={t} label={t} selected={tab === t} secondary={tab !== t} onPress={() => { router.setParams({ cloudtab: t }); setEditor(null); setShowLeave(false); setShowAccess(false); }} />)}</View>
       {tab === 'People' && <View style={s.card}><View style={s.row}><Text style={s.heading}>People · {snapshot.employees.length}</Text>{isHR && <Button label="Add employee" disabled={busy} onPress={() => setEditor('new')} />}</View><Field label="Search people" value={search} onChange={setSearch} />
         {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} employee={editor} snapshot={snapshot} busy={busy} onCancel={() => setEditor(null)} onSave={async values => { const ok = await act(() => rpc('hr_save_employee', { p_organization_id: org, ...values }), 'Employee saved'); if (ok) setEditor(null); }} />}
         {snapshot.employees.filter(e => `${e.name} ${e.department} ${e.job_title}`.toLowerCase().includes(search.toLowerCase())).map(e => <View key={e.id} style={s.listItem}><View style={{ flex: 1, gap: 5 }}><Text style={s.heading}>{e.name}</Text><Text style={s.subtitle}>{e.job_title} · {e.department}</Text><Text style={s.small}>{e.email}</Text><Text style={s.label}>{e.leave_balance} days available · {e.user_id ? 'Account linked' : 'Account not linked'}</Text></View>{isHR && <Button label="Edit" secondary disabled={busy} onPress={() => setEditor(e)} />}</View>)}
@@ -289,6 +290,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
           </View>;
         })}
       </View>}
+      {tab === 'Calendar' && <LeaveCalendar key={org} requests={snapshot.leave} employees={employeesById} />}
       {tab === 'Activity' && isHR && <View style={s.card}><Text style={s.heading}>Server activity history</Text><Text style={s.small}>Latest 100 events. Events are written by database functions and cannot be edited by app users.</Text>{snapshot.audit.map(a => <View key={a.id} style={s.listItem}><View><Text style={s.label}>{a.action}</Text><Text style={s.small}>{new Date(a.created_at).toLocaleString()}</Text><Text selectable style={s.small}>Actor: {a.actor_id}</Text><Text selectable style={s.small}>Record: {a.record_id}</Text></View></View>)}</View>}
       {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(member => <MemberAccess
         key={`${org}:${member.user_id}:${member.role}`}
@@ -409,6 +411,57 @@ function AccountSettings({ busy, onPasswordChange, onEndOtherSessions }: {
     </View>
   </>;
 }
+
+function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employees: Map<string, CloudEmployee> }) {
+  const dayParts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Lusaka', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const today = ['year', 'month', 'day'].map(type => dayParts.find(part => part.type === type)?.value).join('-');
+  const [selected, setSelected] = useState(today);
+  const month = selected.slice(0, 7);
+  const days = calendarDays(month, requests);
+  const selectedRequests = days.find(day => day?.date === selected)?.requests ?? [];
+  const monthLabel = new Date(`${month}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const dateLabel = new Date(`${selected}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+  return <View style={s.card}>
+    <Text style={s.heading}>{monthLabel}</Text>
+    <View style={s.row}>
+      <Button label="Previous month" secondary onPress={() => setSelected(`${calendarMonth(month, -1)}-01`)} />
+      <Button label="Today" secondary onPress={() => setSelected(today)} />
+      <Button label="Next month" secondary onPress={() => setSelected(`${calendarMonth(month, 1)}-01`)} />
+    </View>
+    <View style={calendarStyles.week}>
+      {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(label => <Text key={label} style={calendarStyles.weekday}>{label}</Text>)}
+    </View>
+    {Array.from({ length: days.length / 7 }, (_, week) => <View key={week} style={calendarStyles.week}>
+      {days.slice(week * 7, week * 7 + 7).map((day, index) => day
+        ? <Pressable key={day.date} accessibilityRole="button" accessibilityState={{ selected: day.date === selected }}
+            accessibilityLabel={`${day.date}, ${day.requests.length} leave requests`} onPress={() => setSelected(day.date)}
+            style={[calendarStyles.day, day.date === selected && calendarStyles.selected]}>
+            <Text style={s.label}>{Number(day.date.slice(-2))}</Text>
+            {!!day.requests.length && <Text style={calendarStyles.count}>{day.requests.length}</Text>}
+          </Pressable>
+        : <View key={index} style={calendarStyles.day} />)}
+    </View>)}
+    <Text style={s.heading}>{dateLabel}</Text>
+    {!selectedRequests.length && <Text style={s.subtitle}>No pending or approved leave on this date.</Text>}
+    {selectedRequests.map(request => <View key={request.id} style={s.listItem}>
+      <View>
+        <Text style={s.label}>{employees.get(request.employee_id)?.name ?? 'Employee'}</Text>
+        <Text style={s.small}>{request.status} · {request.start_date} to {request.end_date}</Text>
+      </View>
+    </View>)}
+  </View>;
+}
+
+const calendarStyles = StyleSheet.create({
+  week: { flexDirection: 'row', gap: 2 },
+  weekday: { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: '600', color: '#647267' },
+  day: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
+  selected: { backgroundColor: '#EAF2DA', borderWidth: 1, borderColor: '#647267' },
+  count: { fontSize: 11, fontWeight: '700', color: '#A83318' },
+});
 
 function ConfirmedAction({ label, confirmLabel, busy, onConfirm }: {
   label: string;
