@@ -257,7 +257,13 @@ function CompanyWorkspace({ session }: { session: Session }) {
         {!snapshot.employees.length && <Text style={s.subtitle}>{isHR ? 'Add your first employee to get started.' : 'No employee records are assigned to your account yet.'}</Text>}
       </View>}
       {tab === 'Leave' && <View style={s.card}><Text style={s.heading}>Leave requests</Text><Text style={s.small}>Current policy: whole weekdays only. Public holidays and statutory accrual are not configured. Pending requests reserve available days.</Text><Button label="Request leave" disabled={busy || !eligible.length} onPress={() => setShowLeave(true)} />
-        {showLeave && <LeaveForm employees={eligible} busy={busy} onCancel={() => setShowLeave(false)} onSave={async values => { const ok = await act(() => rpc('hr_request_leave', values), 'Leave submitted'); if (ok) setShowLeave(false); }} />}
+        {showLeave && <LeaveForm employees={eligible} requests={snapshot.leave} busy={busy} onCancel={() => setShowLeave(false)} onSave={async values => {
+          if (await act(() => rpc('hr_request_leave', values), 'Leave submitted')) {
+            setShowLeave(false);
+            setLeaveStatus('Pending');
+            setLeaveSearch('');
+          }
+        }} />}
         {!!snapshot.leave.length && <>
           <Field label="Search leave by name, date or reason" value={leaveSearch} onChange={setLeaveSearch} />
           <View style={s.row}>
@@ -320,10 +326,50 @@ function EmployeeForm({ employee, snapshot, busy, onCancel, onSave }: SaveForm &
   }
   return <View style={s.form}><Text style={s.heading}>{e ? 'Edit employee' : 'New employee'}</Text><Field label="Full name" value={name} onChange={setName} /><Field label="Job title" value={job} onChange={setJob} /><Field label="Department" value={department} onChange={setDepartment} /><Field label="Work email" value={email} onChange={setEmail} /><Field label="Available leave days" value={balance} onChange={setBalance} /><Text style={s.label}>Approving manager</Text><View style={s.row}><Button label="No manager" secondary={manager !== null} onPress={() => setManager(null)} />{snapshot.members.filter(m => ['hr', 'manager'].includes(m.role) && m.user_id !== e?.user_id).map(m => <Button key={m.user_id} label={snapshot.employees.find(e => e.user_id === m.user_id)?.name || `${m.role}: ${m.user_id.slice(0, 8)}`} secondary={manager !== m.user_id} onPress={() => setManager(m.user_id)} />)}</View>{!!error && <Text style={s.error}>{error}</Text>}<View style={s.row}><Button label="Save employee" disabled={busy} onPress={save} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
 }
-function LeaveForm({ employees, busy, onCancel, onSave }: SaveForm & { employees: CloudEmployee[] }) {
-  const [employee, setEmployee] = useState(employees[0]?.id || ''), [start, setStart] = useState(''), [end, setEnd] = useState(''), [reason, setReason] = useState(''), [error, setError] = useState('');
-  function save() { try { weekdays(start, end); if (!employee || !reason.trim()) throw Error('Choose an employee and enter a reason.'); void onSave({ p_employee_id: employee, p_start: start, p_end: end, p_reason: reason }); } catch (err) { setError((err as Error).message); } }
-  return <View style={s.form}><Text style={s.heading}>New leave request</Text><View style={s.row}>{employees.map(e => <Button key={e.id} label={e.name} secondary={employee !== e.id} onPress={() => setEmployee(e.id)} />)}</View><Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} /><Field label="End date (YYYY-MM-DD)" value={end} onChange={setEnd} /><Field label="Reason" value={reason} onChange={setReason} />{!!error && <Text style={s.error}>{error}</Text>}<View style={s.row}><Button label="Submit request" disabled={busy} onPress={save} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
+function LeaveForm({ employees, requests, busy, onCancel, onSave }: SaveForm & { employees: CloudEmployee[]; requests: CloudLeave[] }) {
+  const [employeeId, setEmployeeId] = useState(employees[0]?.id || '');
+  const [start, setStart] = useState(''), [end, setEnd] = useState('');
+  const [reason, setReason] = useState(''), [submitted, setSubmitted] = useState(false);
+  const employee = employees.find(entry => entry.id === employeeId);
+  const startDate = start.trim(), endDate = end.trim(), explanation = reason.trim();
+  const validReason = explanation.length > 0 && Array.from(explanation).length <= 1000;
+  const ownRequests = requests.filter(request => request.employee_id === employeeId);
+  const reserved = ownRequests.reduce((total, request) => request.status === 'Pending' ? total + request.days : total, 0);
+  const available = Math.max(0, (employee?.leave_balance ?? 0) - reserved);
+  let days: number | undefined;
+  let dateError = '';
+  if (startDate && endDate) {
+    try { days = weekdays(startDate, endDate); }
+    catch (error) { dateError = (error as Error).message; }
+  } else if (submitted) {
+    dateError = 'Enter a start and end date.';
+  }
+  const overlaps = days !== undefined && ownRequests.some(request =>
+    (request.status === 'Pending' || request.status === 'Approved') &&
+    request.start_date <= endDate && request.end_date >= startDate,
+  );
+  const formError = dateError || (submitted && (!employee || !validReason)
+    ? 'Choose an employee and enter a reason of up to 1,000 characters.' : '');
+
+  function save() {
+    setSubmitted(true);
+    if (!employee || days === undefined || !validReason) return;
+    void onSave({ p_employee_id: employee.id, p_start: startDate, p_end: endDate, p_reason: explanation });
+  }
+
+  return <View style={s.form}>
+    <Text style={s.heading}>New leave request</Text>
+    <View style={s.row}>{employees.map(entry => <Button key={entry.id} label={entry.name} selected={employeeId === entry.id} secondary={employeeId !== entry.id} onPress={() => setEmployeeId(entry.id)} />)}</View>
+    <Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} />
+    <Field label="End date (YYYY-MM-DD)" value={end} onChange={setEnd} />
+    {employee && <Text style={s.small}>{available} available · {reserved} reserved by pending requests</Text>}
+    {days !== undefined && <Text style={s.label}>{days} working {days === 1 ? 'day' : 'days'} requested</Text>}
+    {overlaps && <Text style={s.error}>These dates overlap a pending or approved request.</Text>}
+    {employee && days !== undefined && days > available && <Text style={s.error}>This request exceeds the available balance shown.</Text>}
+    <Field label="Reason" value={reason} onChange={setReason} />
+    {!!formError && <Text accessibilityRole="alert" style={s.error}>{formError}</Text>}
+    <View style={s.row}><Button label="Submit request" disabled={busy} onPress={save} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View>
+  </View>;
 }
 function AccountSettings({ busy, onPasswordChange, onEndOtherSessions }: {
   busy: boolean;
