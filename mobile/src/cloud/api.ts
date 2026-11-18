@@ -28,14 +28,26 @@ export async function loadOrganizations(): Promise<Organization[]> {
   );
   return organizations.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
 }
+
+export async function loadAuditPage(org: string, before?: Pick<Audit, 'created_at' | 'id'>): Promise<Audit[]> {
+  const query = supabase!.from('hr_audit_events').select('id,action,created_at,actor_id,record_id')
+    .eq('organization_id', org).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(100);
+  if (before) {
+    const timestamp = `"${before.created_at}"`;
+    query.or(`created_at.lt.${timestamp},and(created_at.eq.${timestamp},id.lt.${before.id})`);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function loadSnapshot(org: string, userId: string): Promise<Snapshot> {
-  const [employees, leave, members, auditResult] = await Promise.all([
+  const [employees, leave, members, audit] = await Promise.all([
     readRows<CloudEmployee, 'id'>(() => supabase!.from('hr_employees').select('*').eq('organization_id', org), 'id'),
     readRows<CloudLeave, 'id'>(() => supabase!.from('hr_leave_requests').select('*').eq('organization_id', org), 'id'),
     readRows<Member, 'user_id'>(() => supabase!.from('hr_members').select('user_id,role').eq('organization_id', org), 'user_id'),
-    supabase!.from('hr_audit_events').select('*').eq('organization_id', org).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(100),
+    loadAuditPage(org),
   ]);
-  if (auditResult.error) throw auditResult.error;
   let invitations: Invitation[] | null = null;
   if (members.some(member => member.user_id === userId && member.role === 'hr')) {
     try {
@@ -46,7 +58,7 @@ export async function loadSnapshot(org: string, userId: string): Promise<Snapsho
   }
   employees.sort((a, b) => a.name.localeCompare(b.name));
   leave.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  return { employees, leave, members, audit: auditResult.data || [], invitations };
+  return { employees, leave, members, audit, invitations };
 }
 export async function rpc(name: string, args: Record<string, unknown>) {
   const { data, error } = await supabase!.rpc(name, args);

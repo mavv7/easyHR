@@ -5,7 +5,7 @@ import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth, isDateKey, monthlyAgenda } from './leaveCalendar';
-import { Audit, CloudEmployee, CloudLeave, emptySnapshot, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
+import { Audit, CloudEmployee, CloudLeave, emptySnapshot, loadAuditPage, loadOrganizations, loadSnapshot, Member, Organization, rpc, Snapshot } from './api';
 import { weekdays } from '../domain';
 
 function Button({ label, onPress, disabled = false, secondary = false, selected }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean }) {
@@ -387,7 +387,7 @@ function CompanyWorkspace({ session }: { session: Session }) {
         })}
       </View>}
       {tab === 'Calendar' && <LeaveCalendar key={org} requests={snapshot.leave} employees={employeesById} />}
-      {tab === 'Activity' && isHR && <ActivityHistory key={org} snapshot={snapshot} employees={employeesById} user={session.user} />}
+      {tab === 'Activity' && isHR && <ActivityHistory key={org} org={org} snapshot={snapshot} employees={employeesById} user={session.user} />}
       {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(member => <MemberAccess
         key={`${org}:${member.user_id}:${member.role}`}
         member={member}
@@ -450,13 +450,20 @@ const activityCategories = [
   { label: 'Company', prefixes: ['organization.'] },
 ];
 
-function ActivityHistory({ snapshot, employees, user }: {
+function ActivityHistory({ org, snapshot, employees, user }: {
+  org: string;
   snapshot: Snapshot;
   employees: Map<string, CloudEmployee>;
   user: Session['user'];
 }) {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState(activityCategories[0]);
+  const [history, setHistory] = useState<Audit[] | null>(null);
+  const [atEnd, setAtEnd] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState('');
+  const loading = useRef(false);
+  const loadedEvents = history ?? snapshot.audit;
   const query = search.trim().toLocaleLowerCase();
   const employeesByUser = new Map(snapshot.employees.map(employee => [employee.user_id, employee.name]));
   const leaveById = new Map(snapshot.leave.map(leave => [leave.id, leave]));
@@ -473,21 +480,44 @@ function ActivityHistory({ snapshot, employees, user }: {
       return leave && employees.get(leave.employee_id)?.name;
     }
   }
-  const events = snapshot.audit.map(event => ({
+  const events = loadedEvents.map(event => ({
     event, label: activityLabels[event.action] ?? event.action, actor: userName(event.actor_id), subject: subject(event),
   })).filter(({ event, label, actor, subject }) =>
     (!category.prefixes.length || category.prefixes.some(prefix => event.action.startsWith(prefix))) &&
     [event.action, event.actor_id, event.record_id, label, actor, subject].some(value => value?.toLocaleLowerCase().includes(query)),
   );
+  async function loadOlder() {
+    const cursor = loadedEvents.at(-1);
+    if (!cursor || loading.current) return;
+    loading.current = true;
+    setLoadingOlder(true);
+    setOlderError('');
+    try {
+      const page = await loadAuditPage(org, cursor);
+      // Keep the starting page fixed while browsing so the live refresh cannot create gaps.
+      setHistory([...loadedEvents, ...page]);
+      setAtEnd(page.length === 0);
+    } catch {
+      setOlderError('Could not load older activity. Try again.');
+    } finally {
+      loading.current = false;
+      setLoadingOlder(false);
+    }
+  }
   return <View style={s.card}>
     <Text style={s.heading}>Activity history</Text>
-    <Text style={s.small}>Latest 100 events</Text>
-    {!!snapshot.audit.length && <>
+    <Text style={s.small}>{loadedEvents.length} {loadedEvents.length === 1 ? 'event' : 'events'} loaded. Search and filters apply to loaded events.</Text>
+    {history && <Button label="Back to latest" secondary disabled={loadingOlder} onPress={() => {
+      setHistory(null);
+      setAtEnd(false);
+      setOlderError('');
+    }} />}
+    {!!loadedEvents.length && <>
       <Field label="Search activity" value={search} onChange={setSearch} />
       <View style={s.row}>{activityCategories.map(item => <Button key={item.label} label={item.label}
         selected={item === category} secondary={item !== category} onPress={() => setCategory(item)} />)}</View>
     </>}
-    {!events.length && <Text style={s.subtitle}>{snapshot.audit.length ? 'No events match these filters.' : 'No activity recorded yet.'}</Text>}
+    {!events.length && <Text style={s.subtitle}>{loadedEvents.length ? 'No loaded events match these filters.' : 'No activity recorded yet.'}</Text>}
     {events.map(({ event, label, actor, subject }) => <View key={event.id} style={s.listItem}>
       <View style={{ flex: 1 }}>
         <Text style={s.label}>{label}</Text>
@@ -496,6 +526,10 @@ function ActivityHistory({ snapshot, employees, user }: {
         {!!event.record_id && <Text selectable style={s.small}>Record: {subject ? `${subject} · ${event.record_id}` : event.record_id}</Text>}
       </View>
     </View>)}
+    {!!olderError && <Text accessibilityRole="alert" style={s.error}>{olderError}</Text>}
+    {!!loadedEvents.length && (atEnd
+      ? <Text style={s.small}>You’ve reached the oldest event.</Text>
+      : <Button label={loadingOlder ? 'Loading older events…' : 'Load older events'} secondary disabled={loadingOlder} onPress={() => void loadOlder()} />)}
   </View>;
 }
 
