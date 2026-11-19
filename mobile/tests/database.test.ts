@@ -19,6 +19,7 @@ test('database isolation, authorization and atomic leave workflow', async t => {
     await db.exec(await readFile(new URL('../supabase/migrations/202611180003_manage_members.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180004_pending_requests.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180005_contracts_payroll.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/202611190009_zambia_payroll.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611190006_company_settings.sql', import.meta.url), 'utf8'));
     await db.query('insert into auth.users values ($1, $2, null, $3)', [ids.outsider, 'outsider@example.com', { company_name: 'Other company' }]);
     await db.exec(await readFile(new URL('../supabase/migrations/202611190007_company_signup_otp.sql', import.meta.url), 'utf8'));
@@ -197,6 +198,16 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await assert.rejects(db.query(draft, [org, employee, '2027-01-01', 0, 0, 1]), /Payroll draft changed/);
       assert.equal(Number(await scalar('select base_minor + additional_minor from public.hr_payroll_drafts')), 922345);
       assert.equal(Number(await scalar("select count(*) from public.hr_audit_events where action like 'contract.%' or action = 'payroll.draft_saved'")), 5);
+      assert.equal(Number(await scalar('select bonus_minor from public.hr_payroll_drafts')), 0);
+      const contractTerms = 'select public.hr_save_contract($1,$2,$3,$4,$5,$6,$7,$8,$9)';
+      const bonusDraft = 'select public.hr_save_payroll_draft($1,$2,$3,$4,$5,$6,$7)';
+      await db.query(contractTerms, [org, employee, 'Updated agreement', '2027-01-01', null, id, 3, 910000, '  Housing allowance  ']);
+      assert.equal(await scalar('select pay_terms from public.hr_contracts'), 'Housing allowance');
+      assert.equal(Number(await scalar('select basic_minor from public.hr_contracts')), 910000);
+      await assert.rejects(db.query(bonusDraft, [org, employee, '2027-01-01', 910000, 12345, 2, 12346]), /check constraint/);
+      await db.query(bonusDraft, [org, employee, '2027-01-01', 910000, 12345, 2, 5000]);
+      assert.equal(Number(await scalar('select bonus_minor from public.hr_payroll_drafts')), 5000);
+      await assert.rejects(db.query(bonusDraft, [org, employee, '2027-01-01', 0, 0, 2, 0]), /Payroll draft changed/);
       await assert.rejects(db.query('update public.hr_payroll_drafts set base_minor = 0'));
       for (const user of [ids.employee, ids.manager, ids.outsider]) {
         await as(user);
@@ -204,6 +215,8 @@ test('database isolation, authorization and atomic leave workflow', async t => {
         assert.equal((await db.query('select * from public.hr_payroll_drafts')).rows.length, 0);
         await assert.rejects(db.query(contract, [org, employee, 'Changed', '2027-01-01', null, id, 3]), /HR access required/);
         await assert.rejects(db.query(draft, [org, employee, '2027-01-01', 0, 0, 2]), /HR access required/);
+        await assert.rejects(db.query(bonusDraft, [org, employee, '2027-01-01', 0, 0, 3, 0]), /HR access required/);
+        await assert.rejects(db.query(contractTerms, [org, employee, 'Changed', '2027-01-01', null, id, 4, 0, null]), /HR access required/);
       }
       const otherOrg = await scalar('select id from public.hr_organizations');
       await assert.rejects(db.query(draft, [otherOrg, employee, '2027-01-01', 0, 0, null]), /foreign key/);

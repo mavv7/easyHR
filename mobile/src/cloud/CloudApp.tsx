@@ -6,6 +6,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth, companyDateKey, isDateKey, monthlyAgenda } from './leaveCalendar';
 import { contractEndStatus } from './contractDates';
+import { suggestZambiaDeductions } from './zambiaPayroll';
 import { CompanySettingsScreen } from './CompanySettings';
 import { CompanySignup, EmployeeSignIn, PhoneVerification } from './CompanySignup';
 import { zambianMobile } from './companyRegistration';
@@ -730,8 +731,8 @@ function useHrRegister<T>(load: () => Promise<T[]>) {
     load().then(data => { if (active) setRecords(data); }).catch((err: { code?: string; message?: string }) => {
       if (active) {
         setRecords(null);
-        setError(err.code === 'PGRST205' || err.code === '42P01'
-          ? 'This workspace needs the Contracts and Payroll database migration.'
+        const needsMigration = ['PGRST205', '42P01', '42703'].includes(err.code ?? '');
+        setError(needsMigration ? 'This workspace needs the latest Contracts and Payroll database migrations.'
           : err.message || 'Could not load records.');
       }
     });
@@ -757,6 +758,16 @@ function useHrRegister<T>(load: () => Promise<T[]>) {
 
 function ContractsRegister({ org, employees }: { org: string; employees: CloudEmployee[] }) {
   const load = useCallback(() => loadContracts(org), [org]);
+  const [employer, setEmployer] = useState<Awaited<ReturnType<typeof loadCompanySettings>> | null>(null);
+  useEffect(() => {
+    let active = true;
+    void loadCompanySettings(org).then(settings => {
+      if (active) setEmployer(settings);
+    }, () => {
+      if (active) setEmployer(null);
+    });
+    return () => { active = false; };
+  }, [org]);
   const { records, error, notice, busy, reload, save } = useHrRegister(load);
   const [editor, setEditor] = useState<Contract | 'new' | null>(null);
   const editorFocus = useEditorFocus();
@@ -783,6 +794,11 @@ function ContractsRegister({ org, employees }: { org: string; employees: CloudEm
   return <View style={s.card}>
     <View style={s.cardHeader}>
       <Text accessibilityRole="header" style={s.heading}>Contract register</Text>
+      {employer && <Text style={s.small}>{[
+        employer.profile.legal_name || employer.hr_organizations.name,
+        employer.profile.registration_number && `PACRA ${employer.profile.registration_number}`,
+        employer.profile.address,
+      ].filter(Boolean).join(' · ')}</Text>}
       <View style={s.row}>
         <Button label="Refresh" secondary disabled={busy} onPress={() => reload()} />
         <Button label="Add contract" disabled={busy || !records || !employees.length} onPress={() => openEditor('new')} />
@@ -812,6 +828,8 @@ function ContractsRegister({ org, employees }: { org: string; employees: CloudEm
         </View>
       </View>
       <Text style={s.subtitle}>{names.get(contract.employee_id) ?? 'Employee'} · {contract.start_date}{contract.end_date ? ` to ${contract.end_date}` : ''}</Text>
+      {contract.basic_minor !== null && <Text style={s.small}>{money(contract.basic_minor)} monthly basic pay</Text>}
+      {!!contract.pay_terms && <Text style={s.small}>{contract.pay_terms}</Text>}
       {contract.reviewed_at && <Text style={s.small}>Internally reviewed {new Date(contract.reviewed_at).toLocaleDateString()}</Text>}
       <View style={s.row}>
         <Button label="Edit" secondary disabled={busy} onPress={() => openEditor(contract)} />
@@ -826,6 +844,8 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
   const [title, setTitle] = useState(contract?.title ?? '');
   const [start, setStart] = useState(contract?.start_date ?? '');
   const [end, setEnd] = useState(contract?.end_date ?? '');
+  const [basic, setBasic] = useState(contract?.basic_minor == null ? '' : (contract.basic_minor / 100).toFixed(2));
+  const [payTerms, setPayTerms] = useState(contract?.pay_terms ?? '');
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const name = title.trim(), from = start.trim(), through = end.trim();
@@ -833,11 +853,15 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
   const validTitle = length >= 2 && length <= 120;
   const validStart = isDateKey(from);
   const validEnd = !through || (isDateKey(through) && (!validStart || through >= from));
+  const basicMinor = parsePayrollAmount(basic);
+  const validBasic = !basic.trim() || basicMinor !== null;
+  const validPayTerms = Array.from(payTerms.trim()).length <= 2000;
   const matchingEmployees = employees.filter(entry => entry.name.toLocaleLowerCase().includes(employeeSearch.trim().toLocaleLowerCase()));
   function submit() {
     setSubmitted(true);
-    if (!employee || !validTitle || !validStart || !validEnd) return;
-    void onSave({ p_employee: employee, p_title: name, p_start: from, p_end: through || null, p_id: contract?.id ?? null, p_version: contract?.version ?? null });
+    if (!employee || !validTitle || !validStart || !validEnd || !validBasic || !validPayTerms) return;
+    void onSave({ p_employee: employee, p_title: name, p_start: from, p_end: through || null,
+      p_id: contract?.id ?? null, p_version: contract?.version ?? null, p_basic: basicMinor, p_pay_terms: payTerms.trim() || null });
   }
   return <View style={s.form}>
     {!contract && <>
@@ -850,6 +874,9 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
     <Field label="Contract title" value={title} onChange={setTitle} error={submitted && !validTitle ? 'Enter 2 to 120 characters.' : undefined} />
     <Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} error={submitted && !validStart ? 'Enter a valid start date.' : undefined} />
     <Field label="End date (optional, YYYY-MM-DD)" value={end} onChange={setEnd} error={submitted && !validEnd ? 'Enter a valid date on or after the start date.' : undefined} />
+    <Field label="Monthly basic pay (optional, ZMW)" value={basic} onChange={setBasic} inputMode="decimal" error={submitted && !validBasic ? payrollAmountError : undefined} />
+    <Field label="Allowances, bonuses, benefits and payment terms" value={payTerms} onChange={setPayTerms} error={submitted && !validPayTerms ? 'Use up to 2,000 characters.' : undefined} />
+    <Text style={s.small}>Record how wages and benefits are calculated and when wages are paid. PAYE, NAPSA and NHIMA apply where required by law.</Text>
     {contract?.reviewed_at && <Text style={s.small}>Saving changes returns the contract to internal review.</Text>}
     <View style={s.row}><Button label={busy ? 'Saving…' : 'Save contract'} disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
   </View>;
@@ -867,7 +894,7 @@ function PayrollRegister({ org, employees, payPoints }: { org: string; employees
   }
   return <View style={s.card}>
     <Text accessibilityRole="header" style={s.heading}>Payroll drafts</Text>
-    <Text style={s.small}>Enter monthly gross amounts in ZMW for review before processing payroll.</Text>
+    <Text style={s.small}>Enter monthly basic pay, taxable cash allowances and bonuses in ZMW. Review suggestions for standard employment before processing payroll.</Text>
     <View style={s.toolbar}>
       <View style={s.row}>
         <Button label="Previous month" secondary onPress={() => openPeriod(calendarMonth(period, -1))} />
@@ -900,6 +927,8 @@ function PayrollMonth({ org, period, employees, payPoints }: { org: string; peri
   const group = employees.filter(employee => payPointFilter === undefined || (employee.pay_point_id ?? null) === payPointFilter);
   const groupedDrafts = group.flatMap(employee => drafts.get(employee.id) ?? []);
   const gross = groupedDrafts.reduce((total, draft) => total + draft.base_minor + draft.additional_minor, 0);
+  const net = suggestZambiaDeductions(period, 0, 0) && groupedDrafts.reduce(
+    (total, draft) => total + (suggestZambiaDeductions(period, draft.base_minor, draft.additional_minor)?.net ?? 0), 0);
   const month = new Date(`${period}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const query = search.trim().toLocaleLowerCase();
   const visibleEmployees = group.filter(employee => {
@@ -912,8 +941,10 @@ function PayrollMonth({ org, period, employees, payPoints }: { org: string; peri
     {!!error && !editor && <RegisterFeedback message={error} tone="error" />}
     {!!notice && <RegisterFeedback message={notice} tone="notice" />}
     {!records && !error && <RegisterFeedback message="Loading payroll drafts…" tone="loading" />}
+    {net === null && <Text style={s.small}>Deduction suggestions are available for 2026 payroll months.</Text>}
     {records && <View style={s.metrics}>
       <View style={s.metric}><Text style={s.label}>Draft gross total</Text><Text style={s.metricValue}>{money(gross)}</Text></View>
+      {net !== null && <View style={s.metric}><Text style={s.label}>Estimated net total</Text><Text style={s.metricValue}>{money(net)}</Text></View>}
       <View style={s.metric}><Text style={s.label}>Employee drafts</Text><Text style={s.metricValue}>{groupedDrafts.length} / {group.length}</Text></View>
     </View>}
     {!!records && !!employees.length && <View style={s.toolbar}>
@@ -934,16 +965,18 @@ function PayrollMonth({ org, period, employees, payPoints }: { org: string; peri
     {editor && selected && <RegisterEditor title={selected.draft ? 'Edit payroll draft' : 'New payroll draft'} busy={busy} onClose={closeEditor}>
       <Text style={s.subtitle}>{month}</Text>
       {!!error && <RegisterFeedback message={error} tone="error" />}
-      <PayrollForm key={editor.id} employee={editor} draft={selected.draft} busy={busy} onCancel={closeEditor}
+      <PayrollForm key={editor.id} employee={editor} period={period} draft={selected.draft} busy={busy} onCancel={closeEditor}
       onSave={async values => {
         if (await save(() => rpc('hr_save_payroll_draft', { p_org: org, p_period: `${period}-01`, ...values }), 'Payroll draft saved.')) closeEditor();
       }} />
     </RegisterEditor>}
     {records && visibleEmployees.map(employee => {
       const draft = drafts.get(employee.id);
+      const estimate = draft && suggestZambiaDeductions(period, draft.base_minor, draft.additional_minor);
       return <View key={employee.id} style={s.listItem}>
         <View style={{ flex: 1, gap: 4 }}><Text style={s.label}>{employee.name}</Text><Text style={s.small}>{employee.department}</Text>
           {draft ? <Text style={s.subtitle}>{money(draft.base_minor + draft.additional_minor)}</Text> : <StatusPill label="Draft needed" tone="pending" />}
+          {estimate && <Text style={s.small}>{money(estimate.net)} estimated net</Text>}
         </View>
         <Button label={draft ? 'Edit draft' : 'Add draft'} secondary disabled={busy} onPress={() => {
           editorFocus.capture();
@@ -961,22 +994,39 @@ function parsePayrollAmount(value: string) {
   return minor <= 1_000_000_000 ? minor : null;
 }
 
-function PayrollForm({ employee, draft, busy, onCancel, onSave }: SaveForm & { employee: CloudEmployee; draft?: PayrollDraft }) {
+const payrollAmountError = 'Enter 0 to 10,000,000 ZMW with up to two decimal places.';
+
+function PayrollForm({ employee, period, draft, busy, onCancel, onSave }: SaveForm & { employee: CloudEmployee; period: string; draft?: PayrollDraft }) {
   const [base, setBase] = useState(draft ? (draft.base_minor / 100).toFixed(2) : '');
-  const [additional, setAdditional] = useState(draft ? (draft.additional_minor / 100).toFixed(2) : '0');
+  const [allowances, setAllowances] = useState(draft ? ((draft.additional_minor - draft.bonus_minor) / 100).toFixed(2) : '0');
+  const [bonus, setBonus] = useState(draft ? (draft.bonus_minor / 100).toFixed(2) : '0');
   const [submitted, setSubmitted] = useState(false);
-  const baseMinor = parsePayrollAmount(base), additionalMinor = parsePayrollAmount(additional);
-  const amountError = 'Enter 0 to 10,000,000 ZMW with up to two decimal places.';
+  const baseMinor = parsePayrollAmount(base), allowanceMinor = parsePayrollAmount(allowances), bonusMinor = parsePayrollAmount(bonus);
+  const additionalMinor = allowanceMinor === null || bonusMinor === null ? null : allowanceMinor + bonusMinor;
+  const validAdditional = additionalMinor !== null && additionalMinor <= 1_000_000_000;
+  const estimate = baseMinor !== null && validAdditional ? suggestZambiaDeductions(period, baseMinor, additionalMinor) : null;
   function submit() {
     setSubmitted(true);
-    if (baseMinor === null || additionalMinor === null) return;
-    void onSave({ p_employee: employee.id, p_base: baseMinor, p_additional: additionalMinor, p_version: draft?.version ?? null });
+    if (baseMinor === null || !validAdditional) return;
+    void onSave({ p_employee: employee.id, p_base: baseMinor, p_additional: additionalMinor, p_bonus: bonusMinor, p_version: draft?.version ?? null });
   }
   return <View style={s.form}>
     <Text style={s.heading}>{employee.name}</Text>
-    <Field label="Base pay (ZMW)" value={base} onChange={setBase} inputMode="decimal" error={submitted && baseMinor === null ? amountError : undefined} />
-    <Field label="Additional gross pay (ZMW)" value={additional} onChange={setAdditional} inputMode="decimal" error={submitted && additionalMinor === null ? amountError : undefined} />
-    {baseMinor !== null && additionalMinor !== null && <Text style={s.label}>{money(baseMinor + additionalMinor)} draft gross pay</Text>}
+    <Field label="Basic pay (ZMW)" value={base} onChange={setBase} inputMode="decimal" error={submitted && baseMinor === null ? payrollAmountError : undefined} />
+    <Field label="Total taxable cash allowances (ZMW)" value={allowances} onChange={setAllowances} inputMode="decimal" error={submitted && allowanceMinor === null ? payrollAmountError : undefined} />
+    <Field label="Total taxable bonuses (ZMW)" value={bonus} onChange={setBonus} inputMode="decimal" error={submitted && bonusMinor === null ? payrollAmountError : undefined} />
+    {submitted && additionalMinor !== null && !validAdditional && <Text accessibilityRole="alert" style={s.error}>Allowances and bonuses may total up to 10,000,000 ZMW.</Text>}
+    {baseMinor !== null && validAdditional && <Text style={s.label}>{money(baseMinor + additionalMinor)} draft gross pay</Text>}
+    {estimate && <View style={s.nestedCard}>
+      <Text style={s.label}>Suggested statutory deductions</Text>
+      <Text style={s.small}>ZRA PAYE · {money(estimate.paye)}</Text>
+      <Text style={s.small}>Employee NAPSA · {money(estimate.napsa)}</Text>
+      <Text style={s.small}>Employee NHIMA · {money(estimate.nhima)}</Text>
+      <Text style={s.small}>Total deductions · {money(estimate.deductions)}</Text>
+      <Text style={s.label}>Estimated net pay · {money(estimate.net)}</Text>
+      <Text style={s.small}>Employer NAPSA · {money(estimate.napsa)} · Employer NHIMA · {money(estimate.nhima)}</Text>
+      <Text style={s.small}>Review any exemptions, cumulative PAYE or secondary employment separately.</Text>
+    </View>}
     <View style={s.row}><Button label={busy ? 'Saving…' : 'Save draft'} disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
   </View>;
 }

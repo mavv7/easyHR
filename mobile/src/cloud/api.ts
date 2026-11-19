@@ -6,8 +6,8 @@ export type CloudEmployee = { id: string; organization_id: string; user_id: stri
 export type CloudLeave = { id: string; employee_id: string; created_at: string; start_date: string; end_date: string; days: number; reason: string; status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled' };
 export type Audit = { id: number; action: string; created_at: string; actor_id: string; record_id: string | null };
 export type Invitation = { email: string; role: Member['role']; employee_id: string | null };
-export type Contract = { id: string; employee_id: string; title: string; start_date: string; end_date: string | null; reviewed_at: string | null; version: number };
-export type PayrollDraft = { id: string; employee_id: string; base_minor: number; additional_minor: number; version: number };
+export type Contract = { id: string; employee_id: string; title: string; start_date: string; end_date: string | null; reviewed_at: string | null; version: number; basic_minor: number | null; pay_terms: string | null };
+export type PayrollDraft = { id: string; employee_id: string; base_minor: number; additional_minor: number; bonus_minor: number; version: number };
 export type CompanyProfile = {
   work_days: number[]; payment_method: string; workers_compensation: boolean;
 } & Partial<Record<'phone' | 'address' | 'city' | 'email' | 'legal_name' | 'trading_name' | 'registration_number' |
@@ -70,12 +70,12 @@ export async function loadAuditPage(org: string, before?: Pick<Audit, 'created_a
 }
 
 export function loadContracts(org: string) {
-  return readRows<Contract, 'id'>(() => supabase!.from('hr_contracts').select('id,employee_id,title,start_date,end_date,reviewed_at,version')
+  return readRows<Contract, 'id'>(() => supabase!.from('hr_contracts').select('id,employee_id,title,start_date,end_date,reviewed_at,version,basic_minor,pay_terms')
     .eq('organization_id', org), 'id');
 }
 
 export function loadPayrollDrafts(org: string, period: string) {
-  return readRows<PayrollDraft, 'id'>(() => supabase!.from('hr_payroll_drafts').select('id,employee_id,base_minor,additional_minor,version')
+  return readRows<PayrollDraft, 'id'>(() => supabase!.from('hr_payroll_drafts').select('id,employee_id,base_minor,additional_minor,bonus_minor,version')
     .eq('organization_id', org).eq('period', period), 'id');
 }
 
