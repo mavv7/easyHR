@@ -1,35 +1,15 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import React, { type ComponentRef, useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Session } from '@supabase/supabase-js';
 import { router, useLocalSearchParams } from 'expo-router';
 import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth, companyDateKey, isDateKey, monthlyAgenda } from './leaveCalendar';
 import { contractEndStatus } from './contractDates';
-import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadContracts, loadOrganizations, loadPayrollDrafts, loadSnapshot, Member, Organization, PayrollDraft, rpc, Snapshot } from './api';
+import { CompanySettingsScreen } from './CompanySettings';
+import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadCompanySettings, loadContracts, loadOrganizations, loadPayrollDrafts, loadSnapshot, Member, Organization, PayPoint, PayrollDraft, rpc, Snapshot } from './api';
 import { money, weekdays } from '../domain';
-import { AuthCover, Brand, colors, Rings, s, WorkspaceNav } from './workspaceDesign';
-
-function Button({ label, onPress, disabled = false, secondary = false, selected }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean }) {
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress}
-    style={({ pressed }) => [s.button, secondary && s.secondary, selected && s.filterSelected, disabled && s.disabled, pressed && s.pressed]}>
-    <Text style={[s.buttonText, secondary && s.secondaryText, selected && s.filterText]}>{label}</Text>
-  </Pressable>;
-}
-function Field({ label, value, onChange, secure = false, error, inputMode }: {
-  label: string; value: string; onChange: (v: string) => void; secure?: boolean;
-  error?: string; inputMode?: 'decimal';
-}) {
-  const [focused, setFocused] = useState(false);
-  return <View style={{ gap: 6 }}>
-    <Text style={s.label}>{label}</Text>
-    <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} secureTextEntry={secure}
-      inputMode={inputMode} accessibilityHint={error}
-      autoCapitalize="none" autoCorrect={false} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-      selectionColor={colors.sage} style={[s.input, focused && s.inputFocused, error && s.inputError]} />
-    {!!error && <Text accessibilityRole="alert" style={s.fieldError}>{error}</Text>}
-  </View>;
-}
+import { AuthCover, Brand, Button, colors, Field, Rings, s, WorkspaceNav } from './workspaceDesign';
 
 function StatusPill({ label, tone = 'positive' }: { label: string; tone?: 'positive' | 'pending' | 'neutral' }) {
   return <View style={[s.badge, tone === 'pending' && s.badgePending, tone === 'neutral' && s.badgeNeutral]}>
@@ -218,10 +198,12 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   const [leaveFrom, setLeaveFrom] = useState('');
   const [leaveThrough, setLeaveThrough] = useState('');
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
+  const workspaceScroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const params = useLocalSearchParams<{ cloudtab?: string }>();
   const membership = snapshot.members.find(m => m.user_id === session.user.id), isHR = membership?.role === 'hr';
-  const tabs = ['Overview', 'People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Contracts', 'Payroll', 'Activity', 'Workspace'] : [])];
+  const tabs = ['Overview', 'People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Contracts', 'Payroll', 'Activity', 'Workspace', 'Settings'] : [])];
   const tab = tabs.find(name => name === params.cloudtab) ?? 'Overview';
+  useEffect(() => { workspaceScroll.current?.scrollTo({ y: 0, animated: false }); }, [tab, org, showAccount]);
   const refresh = useCallback(async () => {
     const ticket = ++generation.current;
     setFetching(true);
@@ -274,7 +256,7 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   const departmentQuery = departmentFilter.trim().toLocaleLowerCase();
   const visiblePeople = tab === 'People' && !profile ? snapshot.employees.filter(employee =>
     employee.department.toLocaleLowerCase().includes(departmentQuery) &&
-    `${employee.name} ${employee.department} ${employee.job_title} ${employee.email}`.toLocaleLowerCase().includes(peopleQuery),
+    [employee.name, employee.department, employee.job_title, employee.email, employee.staff_number].join(' ').toLocaleLowerCase().includes(peopleQuery),
   ).sort((a, b) => (peopleSort === 'Department' ? a.department.localeCompare(b.department) : 0) || a.name.localeCompare(b.name)) : [];
   const leaveQuery = leaveSearch.trim().toLocaleLowerCase();
   const from = leaveFrom.trim(), through = leaveThrough.trim();
@@ -286,10 +268,10 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
     return matchesRequest(leave, leaveQuery);
   }) : [];
   const navigation = <WorkspaceNav tabs={org ? tabs : []} active={showAccount ? '' : tab} count={approvals.length} wide={wide}
-    onSelect={name => { setShowAccount(false); openTab(name); }} />;
+    onSelect={name => { setShowAccount(false); if (name === 'People') setProfileId(null); openTab(name); }} />;
   return <View style={[s.frame, wide && s.desktop]}>
     {wide && navigation}
-    <ScrollView style={s.body} keyboardShouldPersistTaps="handled" contentContainerStyle={[s.content, wide && s.contentWide]}>
+    <ScrollView ref={workspaceScroll} style={s.body} keyboardShouldPersistTaps="handled" contentContainerStyle={[s.content, wide && s.contentWide]}>
     {!wide && <Brand />}
     <View style={s.cardHeader}>
       <View style={s.row}>
@@ -360,8 +342,8 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
           {snapshot.employees.length > 1 && <View style={s.row}>{(['Name', 'Department'] as const).map(sort => <Button key={sort} label={`Sort by ${sort.toLowerCase()}`}
             selected={peopleSort === sort} secondary={peopleSort !== sort} onPress={() => setPeopleSort(sort)} />)}</View>}
         </>}
-        {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} employee={editor} snapshot={snapshot} busy={busy} onCancel={() => setEditor(null)} onSave={async values => { const ok = await act(() => rpc('hr_save_employee', { p_organization_id: org, ...values }), 'Employee saved'); if (ok) setEditor(null); }} />}
-        {profile && <EmployeeProfile employee={profile} employees={snapshot.employees} requests={snapshot.leave}
+        {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} org={org} employee={editor} snapshot={snapshot} busy={busy} onCancel={() => setEditor(null)} onSave={async values => { const ok = await act(() => rpc('hr_save_employee', { p_organization_id: org, ...values }), 'Employee saved'); if (ok) setEditor(null); }} />}
+        {profile && <EmployeeProfile employee={profile} employees={snapshot.employees} requests={snapshot.leave} payPoint={snapshot.payPoints.find(point => point.id === profile.pay_point_id)}
           onOpenProfile={id => { setEditor(null); setProfileId(id); }}
           onOpenLeave={() => {
             setLeaveEmployee(profile.id);
@@ -375,6 +357,7 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
           <Pressable accessibilityRole="button" accessibilityLabel={`View ${employee.name}'s profile`}
             disabled={busy} onPress={() => { setEditor(null); setProfileId(employee.id); }} style={{ flex: 1, gap: 5 }}>
             <Text style={s.heading}>{employee.name}</Text>
+            {!!employee.staff_number && <Text style={s.small}>{employee.staff_number}</Text>}
             <Text style={s.subtitle}>{employee.job_title} · {employee.department}</Text>
             <Text style={s.small}>{employee.email}</Text>
             <Text style={s.label}>View profile</Text>
@@ -437,8 +420,9 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
       </View>}
       {tab === 'Calendar' && <LeaveCalendar key={org} requests={snapshot.leave} employees={employeesById} />}
       {tab === 'Contracts' && isHR && <ContractsRegister key={org} org={org} employees={snapshot.employees} />}
-      {tab === 'Payroll' && isHR && <PayrollRegister key={org} org={org} employees={snapshot.employees} />}
+      {tab === 'Payroll' && isHR && <PayrollRegister key={org} org={org} employees={snapshot.employees} payPoints={snapshot.payPoints} />}
       {tab === 'Activity' && isHR && <ActivityHistory key={org} org={org} snapshot={snapshot} employees={employeesById} user={session.user} />}
+      {tab === 'Settings' && isHR && <CompanySettingsScreen key={org} org={org} payPoints={snapshot.payPoints} onSaved={refresh} />}
       {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(member => <MemberAccess
         key={`${org}:${member.user_id}:${member.role}`}
         member={member}
@@ -467,17 +451,73 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   </View>;
 }
 type SaveForm = { busy: boolean; onCancel: () => void; onSave: (values: Record<string, unknown>) => Promise<void> };
-function EmployeeForm({ employee, snapshot, busy, onCancel, onSave }: SaveForm & { employee: CloudEmployee | 'new'; snapshot: Snapshot }) {
+function EmployeeForm({ org, employee, snapshot, busy, onCancel, onSave }: SaveForm & { org: string; employee: CloudEmployee | 'new'; snapshot: Snapshot }) {
   const e = employee === 'new' ? null : employee;
   const [name, setName] = useState(e?.name || ''), [job, setJob] = useState(e?.job_title || ''), [department, setDepartment] = useState(e?.department || ''), [email, setEmail] = useState(e?.email || ''), [balance, setBalance] = useState(String(e?.leave_balance || 0)), [manager, setManager] = useState<string | null>(e?.manager_user_id || null), [error, setError] = useState('');
+  const [payPoint, setPayPoint] = useState(e?.pay_point_id ?? null);
+  const [staffNumber, setStaffNumber] = useState('');
+  const [mode, setMode] = useState<'automatic' | 'manual' | 'legacy' | 'loading' | 'failed'>(e ? 'legacy' : 'loading');
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (e) return;
+    let active = true;
+    void loadCompanySettings(org).then(settings => {
+      if (active) setMode(settings.automatic ? 'automatic' : 'manual');
+    }, err => {
+      if (active) setMode(['PGRST205', '42P01'].includes(err.code) ? 'legacy' : 'failed');
+    });
+    return () => { active = false; };
+  }, [org, e, attempt]);
+  const staffDetails = e ? 'pay_point_id' in e : mode === 'manual' || mode === 'automatic';
   function save() {
     if (name.trim().length < 2 || !job.trim() || !department.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || !/^\d+$/.test(balance) || Number(balance) > 366) { setError('Complete all fields. Leave balance must be a whole number from 0 to 366.'); return; }
-    void onSave({ p_id: e?.id || null, p_version: e?.version || null, p_name: name, p_job_title: job, p_department: department, p_email: email, p_leave_balance: Number(balance), p_manager_user_id: manager });
+    if (mode === 'manual' && !/^[A-Z0-9][A-Z0-9_/-]{0,63}$/i.test(staffNumber.trim())) {
+      setError('Enter an employee number using letters, digits, dashes, underscores or slashes.');
+      return;
+    }
+    setError('');
+    void onSave({
+      p_id: e?.id || null, p_version: e?.version || null, p_name: name, p_job_title: job, p_department: department,
+      p_email: email, p_leave_balance: Number(balance), p_manager_user_id: manager,
+      ...(staffDetails && { p_staff_number: staffNumber || null, p_pay_point_id: payPoint, p_update_staff_details: !!e }),
+    });
   }
-  return <View style={s.form}><Text style={s.heading}>{e ? 'Edit employee' : 'New employee'}</Text><Field label="Full name" value={name} onChange={setName} /><Field label="Job title" value={job} onChange={setJob} /><Field label="Department" value={department} onChange={setDepartment} /><Field label="Work email" value={email} onChange={setEmail} /><Field label="Available leave days" value={balance} onChange={setBalance} /><Text style={s.label}>Approving manager</Text><View style={s.row}><Button label="No manager" secondary={manager !== null} onPress={() => setManager(null)} />{snapshot.members.filter(m => ['hr', 'manager'].includes(m.role) && m.user_id !== e?.user_id).map(m => <Button key={m.user_id} label={snapshot.employees.find(e => e.user_id === m.user_id)?.name || `${m.role}: ${m.user_id.slice(0, 8)}`} secondary={manager !== m.user_id} onPress={() => setManager(m.user_id)} />)}</View>{!!error && <Text style={s.error}>{error}</Text>}<View style={s.row}><Button label="Save employee" disabled={busy} onPress={save} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
+  return <View style={s.form}>
+    <Text style={s.heading}>{e ? 'Edit employee' : 'New employee'}</Text>
+    <Field label="Full name" value={name} onChange={setName} />
+    <Field label="Job title" value={job} onChange={setJob} />
+    <Field label="Department" value={department} onChange={setDepartment} />
+    <Field label="Work email" value={email} onChange={setEmail} />
+    <Field label="Available leave days" value={balance} onChange={setBalance} />
+    {mode === 'manual' && <Field label="Employee number" value={staffNumber} onChange={setStaffNumber} />}
+    {mode === 'automatic' && <Text style={s.small}>An employee number will be assigned on save.</Text>}
+    {!!e?.staff_number && <Text style={s.label}>Employee number · {e.staff_number}</Text>}
+    {staffDetails && !!snapshot.payPoints.length && <>
+      <Text style={s.label}>Pay point</Text>
+      <View style={s.row}>
+        <Button label="Unassigned" secondary selected={!payPoint} onPress={() => setPayPoint(null)} />
+        {snapshot.payPoints.map(point => <Button key={point.id} label={point.name} secondary
+          selected={payPoint === point.id} onPress={() => setPayPoint(point.id)} />)}
+      </View>
+    </>}
+    <Text style={s.label}>Approving manager</Text>
+    <View style={s.row}><Button label="No manager" secondary={manager !== null} onPress={() => setManager(null)} />
+      {snapshot.members.filter(m => ['hr', 'manager'].includes(m.role) && m.user_id !== e?.user_id).map(m =>
+        <Button key={m.user_id} label={snapshot.employees.find(e => e.user_id === m.user_id)?.name || `${m.role}: ${m.user_id.slice(0, 8)}`}
+          secondary={manager !== m.user_id} onPress={() => setManager(m.user_id)} />)}
+    </View>
+    {mode === 'loading' && <Text style={s.small}>Loading employee numbering…</Text>}
+    {mode === 'failed' && <Button label="Retry loading employee numbering" secondary onPress={() => { setMode('loading'); setAttempt(value => value + 1); }} />}
+    {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    <View style={s.row}><Button label="Save employee" disabled={busy || mode === 'loading' || mode === 'failed'} onPress={save} />
+      <Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View>
+  </View>;
 }
 const activityLabels: Record<string, string> = {
   'organization.created': 'Company workspace created',
+  'organization.profile_saved': 'Company profile saved',
+  'organization.numbering_saved': 'Employee numbering policy saved',
+  'organization.pay_point_added': 'Pay point added',
   'employee.created': 'Employee added',
   'employee.updated': 'Employee updated',
   'leave.requested': 'Leave requested',
@@ -767,7 +807,7 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
   </View>;
 }
 
-function PayrollRegister({ org, employees }: { org: string; employees: CloudEmployee[] }) {
+function PayrollRegister({ org, employees, payPoints }: { org: string; employees: CloudEmployee[]; payPoints: PayPoint[] }) {
   const [period, setPeriod] = useState(() => companyDateKey().slice(0, 7));
   const [periodInput, setPeriodInput] = useState(period);
   const [error, setError] = useState('');
@@ -791,30 +831,33 @@ function PayrollRegister({ org, employees }: { org: string; employees: CloudEmpl
         <Button label="Open month" secondary onPress={() => openPeriod(periodInput.trim())} />
       </View>
     </View>
-    <PayrollMonth key={period} org={org} period={period} employees={employees} />
+    <PayrollMonth key={period} org={org} period={period} employees={employees} payPoints={payPoints} />
   </View>;
 }
 
-function PayrollMonth({ org, period, employees }: { org: string; period: string; employees: CloudEmployee[] }) {
+function PayrollMonth({ org, period, employees, payPoints }: { org: string; period: string; employees: CloudEmployee[]; payPoints: PayPoint[] }) {
   const load = useCallback(() => loadPayrollDrafts(org, `${period}-01`), [org, period]);
   const { records, error, notice, busy, reload, save } = useHrRegister(load);
   const [selected, setSelected] = useState<{ employeeId: string; draft?: PayrollDraft } | null>(null);
   const editorFocus = useEditorFocus();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('All employees');
+  const [payPointFilter, setPayPointFilter] = useState<string | null | undefined>();
   const drafts = new Map(records?.map(draft => [draft.employee_id, draft]));
   const editor = employees.find(employee => employee.id === selected?.employeeId);
   function closeEditor() {
     setSelected(null);
     editorFocus.restore();
   }
-  const gross = records?.reduce((total, draft) => total + draft.base_minor + draft.additional_minor, 0) ?? 0;
+  const group = employees.filter(employee => payPointFilter === undefined || (employee.pay_point_id ?? null) === payPointFilter);
+  const groupedDrafts = group.flatMap(employee => drafts.get(employee.id) ?? []);
+  const gross = groupedDrafts.reduce((total, draft) => total + draft.base_minor + draft.additional_minor, 0);
   const month = new Date(`${period}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const query = search.trim().toLocaleLowerCase();
-  const visibleEmployees = employees.filter(employee => {
+  const visibleEmployees = group.filter(employee => {
     if (filter === 'Needs draft' && drafts.has(employee.id)) return false;
     if (filter === 'Entered' && !drafts.has(employee.id)) return false;
-    return `${employee.name} ${employee.department}`.toLocaleLowerCase().includes(query);
+    return [employee.name, employee.department, employee.staff_number].join(' ').toLocaleLowerCase().includes(query);
   });
   return <>
     <View style={s.cardHeader}><Text style={s.heading}>{month}</Text><Button label="Refresh drafts" secondary disabled={busy} onPress={() => reload()} /></View>
@@ -823,10 +866,19 @@ function PayrollMonth({ org, period, employees }: { org: string; period: string;
     {!records && !error && <RegisterFeedback message="Loading payroll drafts…" tone="loading" />}
     {records && <View style={s.metrics}>
       <View style={s.metric}><Text style={s.label}>Draft gross total</Text><Text style={s.metricValue}>{money(gross)}</Text></View>
-      <View style={s.metric}><Text style={s.label}>Employee drafts</Text><Text style={s.metricValue}>{records.length} / {employees.length}</Text></View>
+      <View style={s.metric}><Text style={s.label}>Employee drafts</Text><Text style={s.metricValue}>{groupedDrafts.length} / {group.length}</Text></View>
     </View>}
     {!!records && !!employees.length && <View style={s.toolbar}>
-      <Field label="Search employees or departments" value={search} onChange={setSearch} />
+      <Field label="Search name, department or employee number" value={search} onChange={setSearch} />
+      {!!payPoints.length && <>
+        <Text style={s.label}>Pay point</Text>
+        <View style={s.row}>
+          <Button label="All pay points" secondary selected={payPointFilter === undefined} onPress={() => setPayPointFilter(undefined)} />
+          <Button label="Unassigned" secondary selected={payPointFilter === null} onPress={() => setPayPointFilter(null)} />
+          {payPoints.map(point => <Button key={point.id} label={point.name} secondary selected={payPointFilter === point.id}
+            onPress={() => setPayPointFilter(point.id)} />)}
+        </View>
+      </>}
       <View style={s.row}>{['All employees', 'Needs draft', 'Entered'].map(option => <Button key={option} label={option}
         selected={filter === option} secondary={filter !== option} onPress={() => setFilter(option)} />)}</View>
     </View>}
@@ -915,10 +967,11 @@ function WorkspaceOverview({ snapshot, approvalCount, canApprove, userId, openTa
   </View>;
 }
 
-function EmployeeProfile({ employee, employees, requests, onOpenProfile, onOpenLeave }: {
+function EmployeeProfile({ employee, employees, requests, payPoint, onOpenProfile, onOpenLeave }: {
   employee: CloudEmployee;
   employees: CloudEmployee[];
   requests: CloudLeave[];
+  payPoint?: PayPoint;
   onOpenProfile: (id: string) => void;
   onOpenLeave: () => void;
 }) {
@@ -931,6 +984,8 @@ function EmployeeProfile({ employee, employees, requests, onOpenProfile, onOpenL
       <Text style={s.heading}>{employee.name}</Text>
       <Text style={s.subtitle}>{employee.job_title} · {employee.department}</Text>
       <Text selectable style={s.label}>{employee.email}</Text>
+      {!!employee.staff_number && <Text selectable style={s.label}>Employee number · {employee.staff_number}</Text>}
+      {!!payPoint && <Text style={s.small}>Pay point · {payPoint.name}</Text>}
       <Text style={s.small}>{employee.user_id ? 'Account linked' : 'Account not linked'}</Text>
       <Text style={s.label}>Approving manager</Text>
       <Text style={s.subtitle}>{manager?.name ?? (employee.manager_user_id ? 'Manager assigned' : 'No manager assigned')}</Text>

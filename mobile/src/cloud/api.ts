@@ -2,14 +2,31 @@ import { supabase } from './client';
 import { collectPages } from './pagination';
 export type Organization = { id: string; name: string; owner_id: string };
 export type Member = { user_id: string; role: 'hr' | 'manager' | 'employee' };
-export type CloudEmployee = { id: string; organization_id: string; user_id: string | null; manager_user_id: string | null; name: string; job_title: string; department: string; email: string; leave_balance: number; version: number };
+export type CloudEmployee = { id: string; organization_id: string; user_id: string | null; manager_user_id: string | null; name: string; job_title: string; department: string; email: string; leave_balance: number; version: number; staff_number?: string | null; pay_point_id?: string | null };
 export type CloudLeave = { id: string; employee_id: string; created_at: string; start_date: string; end_date: string; days: number; reason: string; status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled' };
 export type Audit = { id: number; action: string; created_at: string; actor_id: string; record_id: string | null };
 export type Invitation = { email: string; role: Member['role']; employee_id: string | null };
 export type Contract = { id: string; employee_id: string; title: string; start_date: string; end_date: string | null; reviewed_at: string | null; version: number };
 export type PayrollDraft = { id: string; employee_id: string; base_minor: number; additional_minor: number; version: number };
-export type Snapshot = { employees: CloudEmployee[]; leave: CloudLeave[]; members: Member[]; audit: Audit[]; invitations: Invitation[] | null };
-export const emptySnapshot: Snapshot = { employees: [], leave: [], members: [], audit: [], invitations: null };
+export type CompanyProfile = {
+  work_days: number[]; payment_method: string; workers_compensation: boolean;
+} & Partial<Record<'phone' | 'address' | 'city' | 'email' | 'legal_name' | 'trading_name' | 'registration_number' |
+  'postal_address' | 'industry' | 'business' | 'signatory' | 'signatory_title' | 'pay_day' | 'tpin' | 'napsa' | 'nhima', string>>;
+export type NumberingPolicy = {
+  automatic: boolean; prefix: string; separator: string; digits: number; next_number: number;
+  include_year: boolean; include_branch: boolean; separate_number: boolean;
+};
+export type PayPoint = { id: string; name: string; code: string | null };
+export type CompanySettings = NumberingPolicy & { profile: CompanyProfile; profile_version: number; numbering_version: number };
+export type Snapshot = { employees: CloudEmployee[]; leave: CloudLeave[]; members: Member[]; audit: Audit[]; invitations: Invitation[] | null; payPoints: PayPoint[] };
+export const emptySnapshot: Snapshot = { employees: [], leave: [], members: [], audit: [], invitations: null, payPoints: [] };
+
+export async function loadCompanySettings(org: string) {
+  const { data, error } = await supabase!.from('hr_company_settings')
+    .select('*,hr_organizations(name,account_number)').eq('organization_id', org).single();
+  if (error) throw error;
+  return data as CompanySettings & { hr_organizations: { name: string; account_number: string } };
+}
 
 type WorkspacePage<T> = {
   order: (column: string) => WorkspacePage<T>;
@@ -61,16 +78,25 @@ export async function loadSnapshot(org: string, userId: string): Promise<Snapsho
     loadAuditPage(org),
   ]);
   let invitations: Invitation[] | null = null;
+  let payPoints: PayPoint[] = [];
   if (members.some(member => member.user_id === userId && member.role === 'hr')) {
     try {
       invitations = await readRows<Invitation, 'email'>(() => supabase!.rpc('hr_list_invitations', { p_organization_id: org }), 'email');
     } catch (error) {
       if (typeof error !== 'object' || !error || !('code' in error) || error.code !== 'PGRST202') throw error;
     }
+    if (employees.some(employee => 'staff_number' in employee) || !employees.length) {
+      try {
+        payPoints = await readRows<PayPoint, 'id'>(() => supabase!.from('hr_pay_points').select('id,name,code').eq('organization_id', org), 'id');
+        payPoints.sort((a, b) => a.name.localeCompare(b.name));
+      } catch (error) {
+        if (typeof error !== 'object' || !error || !('code' in error) || !['PGRST205', '42P01'].includes(String(error.code))) throw error;
+      }
+    }
   }
   employees.sort((a, b) => a.name.localeCompare(b.name));
   leave.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  return { employees, leave, members, audit, invitations };
+  return { employees, leave, members, audit, invitations, payPoints };
 }
 export async function rpc(name: string, args: Record<string, unknown>) {
   const { data, error } = await supabase!.rpc(name, args);

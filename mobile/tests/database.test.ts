@@ -18,6 +18,7 @@ test('database isolation, authorization and atomic leave workflow', async t => {
     await db.exec(await readFile(new URL('../supabase/migrations/202611180003_manage_members.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180004_pending_requests.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180005_contracts_payroll.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/202611190006_company_settings.sql', import.meta.url), 'utf8'));
     for (const [id, name, company] of [[ids.hr, 'hr', 'Mango Studio'], [ids.outsider, 'outsider', 'Other company']]) {
       await db.query('insert into auth.users values ($1, $2, null, $3)', [id, name + '@example.com', { company_name: company }]);
     }
@@ -205,6 +206,42 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       assert.equal((await db.query('select * from public.hr_organizations')).rows.length, 0);
       assert.equal((await db.query('select * from public.hr_leave_requests')).rows.length, 0);
     });
+    await t.test('company settings validate and isolate profiles, pay points and employee numbering', async () => {
+      const saveProfile = 'select public.hr_save_company_profile($1,$2,$3,$4)';
+      const saveNumbering = "select public.hr_save_numbering($1,$2,$3,'FAC','-',4,1,false,true,true)";
+      const hire = "select public.hr_save_employee($1,'New Hire','Designer','Design',$2,10,p_staff_number => $3,p_pay_point_id => $4)";
+      const details = { work_days: [1, 2, 6], payment_method: 'bank', workers_compensation: true, tpin: '0123456789', email: 'ops@example.com' };
+      await as(ids.hr);
+      assert.match(await scalar('select account_number from public.hr_organizations where id=$1', [org]), /^EH-[0-9]+$/);
+      assert.equal(await scalar('select staff_number from public.hr_employees where id=$1', [employee]), 'EMP0001');
+      await assert.rejects(db.query(saveProfile, [org, 'New company name', { ...details, work_days: [1, 1] }, 0]), /working days/);
+      await assert.rejects(db.query(saveProfile, [org, 'New company name', { ...details, tpin: '1234' }, 0]), /statutory/);
+      await db.query(saveProfile, [org, 'New company name', details, 0]);
+      assert.equal(await scalar('select name from public.hr_organizations where id=$1', [org]), 'New company name');
+      assert.equal(await scalar("select profile->>'tpin' from public.hr_company_settings"), '0123456789');
+      await assert.rejects(db.query(saveProfile, [org, 'Stale name', details, 0]), /profile changed/);
+      const point = await scalar("select public.hr_add_pay_point($1,'Ndola','ndl')", [org]);
+      await assert.rejects(db.query("select public.hr_add_pay_point($1,'NDOLA','OTHER')", [org]), /hr_pay_point_name/);
+      const version = Number(await scalar('select numbering_version from public.hr_company_settings'));
+      await db.query(saveNumbering, [org, version, true]);
+      const first = await scalar(hire, [org, 'first@example.com', null, point]);
+      assert.equal(await scalar('select staff_number from public.hr_employees where id=$1', [first]), 'NDL-FAC-0001');
+      await assert.rejects(db.query(saveNumbering, [org, version + 1, false]), /Numbering changed/);
+      await db.query(saveNumbering, [org, version + 2, true]);
+      const second = await scalar(hire, [org, 'second@example.com', null, point]);
+      assert.equal(await scalar('select staff_number from public.hr_employees where id=$1', [second]), 'NDL-FAC-0002');
+      await db.query(saveNumbering, [org, version + 4, false]);
+      await assert.rejects(db.query(hire, [org, 'manual@example.com', null, null]), /Enter an employee number/);
+      await assert.rejects(db.query(hire, [org, 'manual@example.com', 'ndl-fac-0001', null]), /already exists/);
+      const manual = await scalar(hire, [org, 'manual@example.com', 'legacy-007', null]);
+      assert.equal(await scalar('select staff_number from public.hr_employees where id=$1', [manual]), 'LEGACY-007');
+      await as(ids.outsider);
+      const otherOrg = await scalar('select id from public.hr_organizations');
+      assert.equal(Number(await scalar('select count(*) from public.hr_pay_points')), 0);
+      assert.equal(Number(await scalar('select count(*) from public.hr_company_settings where organization_id=$1', [org])), 0);
+      await assert.rejects(db.query(saveProfile, [org, 'Cross-company edit', details, 1]), /HR access required/);
+      await assert.rejects(db.query(hire, [otherOrg, 'wrong-point@example.com', null, point]), /Choose a pay point in this company/);
+    });
     await t.test('anonymous sessions cannot read tables or execute write functions', async () => {
       await db.exec('reset role; set role anon');
       await assert.rejects(db.query('select * from public.hr_employees'));
@@ -213,6 +250,8 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await assert.rejects(db.query('select public.hr_list_invitations(null)'));
       await assert.rejects(db.query('select * from public.hr_payroll_drafts'));
       await assert.rejects(db.query('select * from public.hr_contracts'));
+      await assert.rejects(db.query('select * from public.hr_company_settings'));
+      await assert.rejects(db.query('select * from public.hr_pay_points'));
     });
   } finally { await db.close(); }
 });

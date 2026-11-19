@@ -27,6 +27,12 @@ In **Payroll**, HR opens a month and enters base and additional gross pay for ea
 
 Both modules require migration `202611180005_contracts_payroll.sql`. Only HR members of the company can access these records. Audit events record who changed each record and when, with salary values kept in the payroll table.
 
+## Company settings
+
+Apply `202611190006_company_settings.sql` to enable the **Settings** section for HR. It shows the company's easyHR account number, missing employer details, company profile, work and pay preferences, statutory accounts, employee numbering and pay points. These preferences are stored for the company. Leave still uses its existing weekday calculation, and statutory exports and contract generation are outside the current workflow.
+
+New employee records use the company's numbering policy. Automatic numbers use a company-wide sequence and can include the year and selected pay point code. Manual numbers are unique within the company. The migration preserves existing employee records, including records that predate employee numbering. Changing a policy or employee's pay point preserves their assigned number.
+
 ## Password recovery
 
 In Supabase Authentication, edit the **Reset Password** email template so it includes the one-time code. For example, use the subject `Reset your easyHR password` and this body:

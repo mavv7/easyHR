@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 export const colors = {
   canvas: '#F5F3EC', paper: '#FFFDF8', ink: '#202D26', muted: '#59685E',
@@ -107,36 +107,76 @@ export function AuthCover({ wide }: { wide: boolean }) {
   </View>;
 }
 
+const navigationGroups = [
+  { label: 'Overview', items: ['Overview'] },
+  { label: 'People', items: ['People', 'Leave', 'Calendar', 'Approvals', 'Contracts'] },
+  { label: 'Pay', items: ['Payroll'] },
+  { label: 'Workspace', items: ['Activity', 'Workspace', 'Settings'] },
+];
+const navigationAliases: Record<string, string> = {
+  Overview: 'dashboard today', People: 'staff files employee directory', Settings: 'company profile numbering pay points',
+};
+
 export function WorkspaceNav({ tabs, active, count, wide, onSelect }: {
   tabs: string[]; active: string; count: number; wide: boolean; onSelect: (name: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const primary = tabs.slice(0, 3);
   const more = tabs.slice(3);
   const activeMore = more.includes(active);
+  function closeMenu() {
+    setMenuOpen(false);
+    setQuery('');
+  }
   function item(name: string, compact = false) {
     return <Pressable key={name} accessibilityRole="button"
     accessibilityState={{ selected: active === name }}
     accessibilityLabel={name === 'Approvals' && count ? `Approvals, ${count} pending` : name}
-    onPress={() => { setMenuOpen(false); onSelect(name); }}
+    onPress={() => { closeMenu(); onSelect(name); }}
     style={({ pressed }) => [compact ? internal.mobileItem : internal.navItem, active === name && internal.navActive, pressed && s.pressed]}>
-    <Text accessibilityElementsHidden style={[internal.navIcon, active === name && internal.navActiveText]}>{marks[name]}</Text>
+    <Text accessibilityElementsHidden style={[internal.navIcon, active === name && internal.navActiveText]}>{marks[name] ?? '⚙'}</Text>
     <Text style={[internal.navLabel, active === name && internal.navActiveText]}>{name}</Text>
     {name === 'Approvals' && !!count && <Text style={internal.navCount}>{count}</Text>}
     </Pressable>;
   }
+  const groups = navigationGroups.map(group => ({
+    ...group,
+    items: group.items.filter(name => tabs.includes(name) &&
+      `${name} ${navigationAliases[name] ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())),
+  })).filter(group => group.items.length);
+  const search = <TextInput accessibilityLabel="Search workspace sections" placeholder="Find a section"
+    placeholderTextColor="#B7CDCA" value={query} onChangeText={setQuery} autoCorrect={false}
+    style={internal.navSearch} />;
+  const sections = <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={internal.railList}>
+    {groups.map(group => <View key={group.label}>
+      <Text accessibilityRole="header" style={internal.navGroup}>{group.label}</Text>
+      {group.items.map(name => item(name))}
+    </View>)}
+    {!groups.length && <Text style={internal.navGroup}>{tabs.length ? 'No matching sections' : 'No workspace sections'}</Text>}
+  </ScrollView>;
   return wide ? <View style={internal.rail}>
     <Brand dark />
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={internal.railList}>{tabs.map(name => item(name))}</ScrollView>
+    {search}
+    {sections}
   </View> : <View style={internal.mobileBar}>
-    {menuOpen && <View style={internal.mobileMenu}>{more.map(name => item(name))}</View>}
+    <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={closeMenu}>
+      <View style={internal.menuBackdrop}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Dismiss menu" style={StyleSheet.absoluteFill} onPress={closeMenu} />
+        <View accessibilityViewIsModal style={internal.mobileMenu}>
+          <View style={internal.menuHeader}><Brand dark /><Button label="Close" secondary onPress={closeMenu} /></View>
+          {search}
+          {sections}
+        </View>
+      </View>
+    </Modal>
     <View style={internal.mobileList}>
       {primary.map(name => item(name, true))}
-      {!!more.length && <Pressable accessibilityRole="button" accessibilityLabel="More workspace sections"
-        accessibilityState={{ expanded: menuOpen, selected: activeMore }} onPress={() => setMenuOpen(!menuOpen)}
+      {!!more.length && <Pressable accessibilityRole="button" accessibilityLabel="Open workspace menu"
+        accessibilityState={{ expanded: menuOpen, selected: activeMore }} onPress={() => setMenuOpen(true)}
         style={({ pressed }) => [internal.mobileItem, activeMore && internal.navActive, pressed && s.pressed]}>
         <Text style={[internal.navIcon, activeMore && internal.navActiveText]}>{menuOpen ? '⌄' : '⋯'}</Text>
-        <Text style={[internal.navLabel, activeMore && internal.navActiveText]}>{activeMore ? active : 'More'}</Text>
+        <Text style={[internal.navLabel, activeMore && internal.navActiveText]}>Menu</Text>
       </Pressable>}
     </View>
   </View>;
@@ -156,16 +196,41 @@ const internal = StyleSheet.create({
   art: { position: 'absolute', right: -51, top: -53, width: 252, height: 252, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '-18deg' }] },
   ring: { position: 'absolute', borderWidth: 1, borderColor: '#BBD3BD55', borderRadius: 140 },
   orbit: { position: 'absolute', right: 38, bottom: 41, width: 16, height: 16, borderRadius: 8, backgroundColor: colors.lime },
-  rail: { width: 214, backgroundColor: colors.forestDark, padding: 17, paddingTop: 25, gap: 25 },
-  railList: { gap: 5 },
+  rail: { width: 214, backgroundColor: colors.forestDark, padding: 17, paddingTop: 25, gap: 16 },
+  railList: { gap: 12, paddingBottom: 14 },
+  navSearch: { minHeight: 44, color: colors.paper, backgroundColor: '#24483D', borderRadius: 10, paddingHorizontal: 11 },
+  navGroup: { color: '#B7CDCA', fontSize: 12, fontWeight: '700', paddingHorizontal: 11, paddingVertical: 6 },
   navItem: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 44, paddingHorizontal: 11, borderRadius: 9 },
   mobileBar: { backgroundColor: colors.forestDark },
   mobileList: { flexDirection: 'row', gap: 4, paddingHorizontal: 8, paddingVertical: 6 },
   mobileItem: { flex: 1, minWidth: 0, alignItems: 'center', justifyContent: 'center', gap: 1, minHeight: 49, borderRadius: 8 },
-  mobileMenu: { position: 'absolute', bottom: 65, right: 10, minWidth: 190, padding: 8, gap: 4, backgroundColor: colors.forestDark, borderColor: '#496A5B', borderWidth: 1, borderRadius: 12 },
+  menuBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#10251E77', padding: 12 },
+  mobileMenu: { maxHeight: '90%', padding: 14, gap: 12, backgroundColor: colors.forestDark, borderRadius: 16 },
+  menuHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   navIcon: { color: '#B7CDCA', width: 20, textAlign: 'center', fontSize: 17 },
   navLabel: { color: '#E0EDE4', fontSize: 13, fontWeight: '600' },
   navActive: { backgroundColor: colors.lime },
   navActiveText: { color: colors.forestDark },
   navCount: { backgroundColor: colors.paper, color: colors.forestDark, borderRadius: 12, fontSize: 11, paddingHorizontal: 6, paddingVertical: 2, fontWeight: '700' },
 });
+
+export function Button({ label, onPress, disabled = false, secondary = false, selected }: { label: string; onPress: () => void; disabled?: boolean; secondary?: boolean; selected?: boolean }) {
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled, selected }} disabled={disabled} onPress={onPress}
+    style={({ pressed }) => [s.button, secondary && s.secondary, selected && s.filterSelected, disabled && s.disabled, pressed && s.pressed]}>
+    <Text style={[s.buttonText, secondary && s.secondaryText, selected && s.filterText]}>{label}</Text>
+  </Pressable>;
+}
+export function Field({ label, value, onChange, secure = false, error, inputMode }: {
+  label: string; value: string; onChange: (v: string) => void; secure?: boolean;
+  error?: string; inputMode?: 'decimal' | 'numeric' | 'email' | 'tel';
+}) {
+  const [focused, setFocused] = useState(false);
+  return <View style={{ gap: 6 }}>
+    <Text style={s.label}>{label}</Text>
+    <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} secureTextEntry={secure}
+      inputMode={inputMode} accessibilityHint={error}
+      autoCapitalize="none" autoCorrect={false} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      selectionColor={colors.sage} style={[s.input, focused && s.inputFocused, error && s.inputError]} />
+    {!!error && <Text accessibilityRole="alert" style={s.fieldError}>{error}</Text>}
+  </View>;
+}
