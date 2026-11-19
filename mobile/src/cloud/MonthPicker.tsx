@@ -17,7 +17,7 @@ export function MonthPicker({ period, onChange, disabled }: {
   const [error, setError] = useState('');
   function choose(month: string) {
     const value = month.trim();
-    if (!isDateKey(value + '-01') || value.startsWith('0000')) {
+    if (!isDateKey(value + '-01')) {
       setError('Enter a month in YYYY-MM format.');
       return;
     }

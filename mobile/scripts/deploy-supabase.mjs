@@ -67,6 +67,7 @@ try {
       '202611190010_payroll_review.sql',
       '202611190011_hr_operations.sql',
       '202611190012_workflow_documents.sql',
+      '202611200013_workflow_integrity.sql',
     ]) {
       const version = file.split('_')[0];
       const migration = await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8');

@@ -15,6 +15,8 @@ test('leave calendar aligns Monday-first weeks and handles leap days and year ch
   assert.equal(isDateKey('2028-02-29'), true);
   assert.equal(isDateKey('2027-02-29'), false);
   assert.equal(isDateKey('2028-2-29'), false);
+  assert.equal(isDateKey('0000-01-01'), false);
+  assert.equal(calendarDays('9999-12', []).filter(Boolean).length, 31);
 });
 
 test('contract expiry flags use the company date and a 30-day inclusive window', () => {
@@ -25,6 +27,7 @@ test('contract expiry flags use the company date and a 30-day inclusive window',
   assert.equal(contractEndStatus(today, today), 'Ending soon');
   assert.equal(contractEndStatus('2028-03-02', today), 'Ending soon');
   assert.equal(contractEndStatus('2028-03-03', today), null);
+  assert.equal(contractEndStatus('9999-12-31', '9999-12-15'), 'Ending soon');
 });
 
 test('leave calendar shows pending and approved requests across months on weekdays', () => {

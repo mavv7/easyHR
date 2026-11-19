@@ -120,7 +120,7 @@ function WorkflowChoice({ label, choices, value, disabled, onChange }: {
 export function WorkflowWorkspace({ org, userId, membership, snapshot, initialSection, initialMonth }: {
   org: string; userId: string; membership: Member; snapshot: Snapshot; initialSection?: string; initialMonth?: string;
 }) {
-  const [period, setPeriod] = useState(() => initialMonth && !initialMonth.startsWith('0000') && isDateKey(initialMonth + '-01')
+  const [period, setPeriod] = useState(() => initialMonth && isDateKey(initialMonth + '-01')
     ? initialMonth : companyDateKey().slice(0, 7));
   const [section, setSection] = useState(initialSection ?? 'My records');
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -198,6 +198,7 @@ function PayrollReview({ payroll, operations, isHR, userId, period, call, setEdi
 }) {
   const run = payroll.run;
   const editable = isHR && (!run || run.status === 'returned');
+  const hasOtherReviewer = payroll.reviewers.some(reviewer => reviewer !== userId);
   const reviewable = payroll.finance && run?.status === 'submitted' && run.submitted_by !== userId;
   const missing = payroll.rows.filter(row => row.version === null).length;
   const overtime = new Map(operations.overtime.map(entry => [entry.employee_id, entry]));
@@ -223,7 +224,7 @@ function PayrollReview({ payroll, operations, isHR, userId, period, call, setEdi
     <Text style={s.label}>{run?.status ?? 'Draft'} · {missing} missing drafts</Text>
     {!!run?.comment && <Text style={s.subtitle}>{run.comment}</Text>}
     <View style={s.row}>
-      {editable && <Button label="Submit to Finance" disabled={missing === payroll.rows.length || period.slice(0, 4) !== '2026'} onPress={() => review('submit')} />}
+      {editable && <Button label="Submit to Finance" disabled={!hasOtherReviewer || missing === payroll.rows.length || period.slice(0, 4) !== '2026'} onPress={() => review('submit')} />}
       {reviewable && <><Button label="Approve payroll" onPress={() => review('approve')} /><Button label="Return to HR" secondary onPress={() => review('return')} /></>}
       {isHR && <Button label="Schedule pay change" disabled={!employeeChoices.length} secondary onPress={schedule} />}
       {isHR && <Button label="Finance access" secondary onPress={() => setEditor({
@@ -235,6 +236,7 @@ function PayrollReview({ payroll, operations, isHR, userId, period, call, setEdi
         ], save: ({ member, access }) => call('hr_finance_access', { p_user: required(member), p_enabled: access === 'Grant' }),
       })} />}
     </View>
+    {editable && !hasOtherReviewer && <Text style={s.small}>Grant Finance access to another workspace member before submitting.</Text>}
     {payroll.rows.map(row => {
       const gross = (row.basic ?? 0) + (row.additional ?? 0);
       const change = row.previous_gross === null || row.basic === null ? null : gross - row.previous_gross;

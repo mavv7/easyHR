@@ -1255,9 +1255,9 @@ function LeaveCalendar({ requests, employees }: { requests: CloudLeave[]; employ
   return <View style={s.card}>
     <Text style={s.heading}>{monthLabel}</Text>
     <View style={s.row}>
-      <Button label="Previous month" secondary onPress={() => setSelected(`${calendarMonth(month, -1)}-01`)} />
+      <Button label="Previous month" secondary disabled={month === '0001-01'} onPress={() => setSelected(`${calendarMonth(month, -1)}-01`)} />
       <Button label="Today" secondary onPress={() => setSelected(today)} />
-      <Button label="Next month" secondary onPress={() => setSelected(`${calendarMonth(month, 1)}-01`)} />
+      <Button label="Next month" secondary disabled={month === '9999-12'} onPress={() => setSelected(`${calendarMonth(month, 1)}-01`)} />
     </View>
     <View style={s.row}>
       {(['Day', 'Month'] as const).map(option => <Button key={option} label={option === 'Month' ? 'Month agenda' : 'Day view'}

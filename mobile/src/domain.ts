@@ -17,7 +17,7 @@ export const seed: State = {
 export function weekdays(start: string, end: string): number {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) throw Error('Use dates in YYYY-MM-DD format.');
   const a = new Date(start + 'T00:00:00Z'), b = new Date(end + 'T00:00:00Z');
-  if (!Number.isFinite(+a) || !Number.isFinite(+b) || a.toISOString().slice(0, 10) !== start || b.toISOString().slice(0, 10) !== end || b < a || +b - +a > 366 * 86400000) throw Error('Enter a valid date range of up to one year.');
+  if (start.startsWith('0000-') || !Number.isFinite(+a) || !Number.isFinite(+b) || a.toISOString().slice(0, 10) !== start || b.toISOString().slice(0, 10) !== end || b < a || +b - +a > 366 * 86400000) throw Error('Enter a valid date range of up to one year.');
   let days = 0;
   for (let d = +a; d <= +b; d += 86400000) if (![0, 6].includes(new Date(d).getUTCDay())) days++;
   if (!days) throw Error('Select at least one weekday.');
@@ -31,4 +31,20 @@ export function decideLeave(state: State, id: string, approved: boolean): State 
   if (approved && employee.balance < item.days) throw Error('Insufficient leave balance.');
   return { ...state, leave: state.leave.map(l => l.id === id ? { ...l, status: approved ? 'Approved' : 'Declined' } : l), employees: state.employees.map(e => approved && e.id === employee.id ? { ...e, balance: e.balance - item.days } : e) };
 }
+
+export function requestLeave(state: State, request: Omit<Leave, 'days' | 'status'>): State {
+  const employee = state.employees.find(entry => entry.id === request.employeeId);
+  if (!employee) throw Error('Choose an employee.');
+  const days = weekdays(request.start, request.end);
+  const reason = request.reason.trim();
+  if (!reason) throw Error('Add a reason for the request.');
+
+  const requests = state.leave.filter(entry => entry.employeeId === employee.id && entry.status !== 'Declined');
+  if (requests.some(entry => entry.start <= request.end && entry.end >= request.start)) throw Error('This overlaps an existing leave request.');
+  const reserved = requests.reduce((total, entry) => entry.status === 'Pending' ? total + entry.days : total, 0);
+  if (days + reserved > employee.balance) throw Error('Insufficient unreserved leave balance.');
+
+  return { ...state, leave: [{ ...request, days, reason, status: 'Pending' }, ...state.leave] };
+}
+
 export const money = (minor: number) => 'K ' + (minor / 100).toLocaleString('en-ZM', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

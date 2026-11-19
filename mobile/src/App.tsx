@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { seed, State, Employee, weekdays, decideLeave, money } from './domain';
+import { seed, State, Employee, requestLeave, decideLeave, money } from './domain';
 
 import { Brand, colors, WorkspaceNav } from './cloud/workspaceDesign';
 
@@ -34,11 +34,11 @@ function Workspace() {
         const item: Employee = { id: Date.now().toString(), name: form.name.trim(), role: form.role.trim(), department: form.department.trim(), email: form.email.trim(), salary: 0, balance: 0 };
         change(s => ({ ...s, employees: [...s.employees, item] }), `${item.name} added. Salary and leave allocation need setup.`);
       } else {
-        const id = form.employeeId || state.employees[0].id, days = weekdays(form.start || '', form.end || '');
-        if (!form.reason?.trim()) throw Error('Add a reason for the request.');
-        if (days > employee(id).balance) throw Error('Request exceeds the available balance.');
-        if (state.leave.some(l => l.employeeId === id && l.status !== 'Declined' && l.start <= form.end && l.end >= form.start)) throw Error('This overlaps an existing leave request.');
-        change(s => ({ ...s, leave: [{ id: Date.now().toString(), employeeId: id, start: form.start, end: form.end, days, reason: form.reason.trim(), status: 'Pending' }, ...s.leave] }), 'Leave request submitted for review');
+        const next = requestLeave(state, {
+          id: Date.now().toString(), employeeId: form.employeeId || state.employees[0]?.id || '',
+          start: form.start || '', end: form.end || '', reason: form.reason || '',
+        });
+        change(() => next, 'Leave request submitted for review');
       }
       setModal(null);
     } catch (e) { setForm(f => ({ ...f, error: (e as Error).message })); }
