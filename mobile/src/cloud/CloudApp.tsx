@@ -7,6 +7,7 @@ import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth, companyDateKey, isDateKey, monthlyAgenda } from './leaveCalendar';
 import { contractEndStatus } from './contractDates';
 import { CompanySettingsScreen } from './CompanySettings';
+import { CompanyPhoneVerification, CompanySignup } from './CompanySignup';
 import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadCompanySettings, loadContracts, loadOrganizations, loadPayrollDrafts, loadSnapshot, Member, Organization, PayPoint, PayrollDraft, rpc, Snapshot } from './api';
 import { money, weekdays } from '../domain';
 import { AuthCover, Brand, Button, colors, Field, Rings, s, WorkspaceNav } from './workspaceDesign';
@@ -44,26 +45,24 @@ export default function CloudApp({ onDemo }: { onDemo: () => void }) {
 function SignIn() {
   const [email, setEmail] = useState(''), [password, setPassword] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   const [mode, setMode] = useState<'signin' | 'company' | 'member' | 'recovery'>('signin');
-  const [company, setCompany] = useState('');
   async function authenticate() {
     const signup = mode !== 'signin';
     if (busy) return;
-    if (mode === 'company' && (company.trim().length < 2 || company.trim().length > 120)) {
-      setMessage('Enter a company name between 2 and 120 characters.');
-      return;
-    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || password.length < 8) { setMessage('Enter a valid email and a password of at least 8 characters.'); return; }
     setBusy(true); setMessage('');
     try {
       const credentials = { email: email.trim(), password };
       const result = signup
-        ? await supabase!.auth.signUp({ ...credentials, options: { data: mode === 'company' ? { company_name: company.trim() } : { join_workspace: true } } })
+        ? await supabase!.auth.signUp({ ...credentials, options: { data: { join_workspace: true } } })
         : await supabase!.auth.signInWithPassword(credentials);
       if (result.error) throw result.error;
       if (signup && !result.data.session) setMessage('Check your email to confirm your account, then return here and sign in.');
       setPassword('');
     } catch (err) { setMessage((err as Error).message); } finally { setBusy(false); }
   }
+  if (mode === 'company') return <CompanySignup initialEmail={email} onBack={address => {
+    setEmail(address); setMode('signin'); setPassword(''); setMessage('');
+  }} />;
   if (mode === 'recovery') return <PasswordRecovery initialEmail={email} onBack={(notice, address) => {
     setMode('signin');
     setEmail(address);
@@ -72,13 +71,12 @@ function SignIn() {
   }} />;
 
   return <View style={{ gap: 15 }}>
-    <Text accessibilityRole="header" style={s.title}>{mode === 'company' ? 'Register your company' : mode === 'member' ? 'Activate company access' : 'Sign in'}</Text>
-    {mode === 'company' && <Field label="Company name" value={company} onChange={setCompany} />}
+    <Text accessibilityRole="header" style={s.title}>{mode === 'member' ? 'Activate company access' : 'Sign in'}</Text>
     {mode === 'member' && <Text style={s.subtitle}>Use the work email your HR administrator authorized.</Text>}
     <Field label="Work email" value={email} onChange={setEmail} />
     <Field label="Password" value={password} onChange={setPassword} secure />
     {!!message && <Text accessibilityRole="alert" style={s.subtitle}>{message}</Text>}
-    <Button label={busy ? 'Please wait…' : mode === 'company' ? 'Register company' : mode === 'member' ? 'Activate access' : 'Sign in'} disabled={busy} onPress={() => void authenticate()} />
+    <Button label={busy ? 'Please wait…' : mode === 'member' ? 'Activate access' : 'Sign in'} disabled={busy} onPress={() => void authenticate()} />
     {mode === 'signin' ? <View style={s.row}>
       <Button label="Register a company" disabled={busy} onPress={() => { setMode('company'); setMessage(''); }} secondary />
       <Button label="Activate HR-approved access" disabled={busy} onPress={() => { setMode('member'); setMessage(''); }} secondary />
@@ -188,6 +186,7 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(true), [message, setMessage] = useState('');
   const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [showAccess, setShowAccess] = useState(false), [search, setSearch] = useState('');
   const [showAccount, setShowAccount] = useState(false);
+  const [pendingPhone, setPendingPhone] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [peopleSort, setPeopleSort] = useState<'Name' | 'Department'>('Name');
@@ -208,7 +207,12 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
     const ticket = ++generation.current;
     setFetching(true);
     try {
-      if (!org) await rpc('hr_activate_workspace', {});
+      if (!org) {
+        await rpc('hr_activate_workspace', {});
+        const { data: phone, error } = await supabase!.rpc('hr_pending_company_phone');
+        if (error && error.code !== 'PGRST202') throw error;
+        if (mounted.current && ticket === generation.current) setPendingPhone(typeof phone === 'string' ? phone : null);
+      }
       const list = await loadOrganizations();
       const selected = list.some(o => o.id === org) ? org : list[0]?.id || '';
       const data = selected ? await loadSnapshot(selected, session.user.id) : emptySnapshot;
@@ -269,6 +273,19 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   }) : [];
   const navigation = <WorkspaceNav tabs={org ? tabs : []} active={showAccount ? '' : tab} count={approvals.length} wide={wide}
     onSelect={name => { setShowAccount(false); if (name === 'People') setProfileId(null); openTab(name); }} />;
+  if (pendingPhone) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
+    <Brand />
+    <CompanyPhoneVerification initialPhone={pendingPhone} onVerified={async () => {
+      await rpc('hr_activate_workspace', {});
+      const remainingPhone = await rpc('hr_pending_company_phone', {});
+      if (remainingPhone) throw new Error('Your number is still awaiting confirmation. Refresh and try again.');
+      await refresh();
+      setPendingPhone(null);
+    }} onSignOut={async () => {
+      const { error } = await supabase!.auth.signOut({ scope: 'local' });
+      if (error) throw error;
+    }} />
+  </ScrollView>;
   return <View style={[s.frame, wide && s.desktop]}>
     {wide && navigation}
     <ScrollView ref={workspaceScroll} style={s.body} keyboardShouldPersistTaps="handled" contentContainerStyle={[s.content, wide && s.contentWide]}>

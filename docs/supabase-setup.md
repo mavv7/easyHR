@@ -6,9 +6,26 @@ The connected MVP implements accounts, organization membership, employee records
 
 1. Choose a dedicated development Supabase project. Connect the Supabase integration to let the assistant inspect and migrate the selected project, or apply the SQL files in `mobile/supabase/migrations` in version order in the project's SQL Editor. Each migration is transactional and should run once. Its tables use the `hr_` prefix; inspect existing schema before applying it to a shared project.
 2. Copy `mobile/.env.example` to `mobile/.env.local` and fill in the project URL and **publishable key** from the project Connect/API dialog. A legacy anon key also works. Never put a service-role key, secret key or database password in an `EXPO_PUBLIC_*` variable: these values are included in application bundles.
-3. In Supabase Authentication, enable email/password sign-in and email confirmation. Set an appropriate Site URL for the confirmation landing page. The current flow confirms in a browser and then asks users to return to the app and sign in; it does not consume tokens from a deep link. Configure production SMTP before inviting a team.
+3. Configure [company signup verification](#company-signup-verification) in Supabase Auth before registering a company.
 4. Restart Expo with `cd mobile` then `npx.cmd expo start --clear`. The app shows a configuration screen if the URL/key are missing.
-5. Choose Register a company and enter the company name and HR administrator email. Confirm that email and sign in to activate the workspace. Each company starts with an empty workspace, Zambia and ZMW defaults, and its registrar as HR.
+5. Choose **Register a company**, enter the company details and confirm the email code, then request and confirm the SMS code. Each company starts with an empty workspace, Zambia and ZMW defaults, and its registrar as HR.
+
+## Company signup verification
+
+Apply `202611190007_company_signup_otp.sql` after the company settings migration. Enable the Email and Phone providers in Supabase Auth and require confirmation for both. Configure SMTP for external recipients and an SMS provider that can deliver to your intended destinations, including Zambian numbers. Set an appropriate Site URL for employee confirmation links.
+
+In the **Confirm signup** email template, use a code for new company registrations and retain the existing confirmation link for HR-approved team members and registrations started before the migration.
+
+```html
+{{ if (index .Data "company_type") }}
+<p>Your easyHR email verification code is <strong>{{ .Token }}</strong>.</p>
+<p>Enter this code in easyHR to continue registering your company.</p>
+{{ else }}
+<p><a href="{{ .ConfirmationURL }}">Confirm your easyHR email address</a></p>
+{{ end }}
+```
+
+Verify delivery with a controlled inbox and mobile number. After the email code is verified, the app requests an SMS for the same signed-in account. Workspace activation checks both confirmation timestamps in Supabase Auth and stores the verified email and mobile number, company type and TPIN in Company Settings.
 
 ## End-to-end acceptance flow
 
@@ -87,5 +104,7 @@ The database test applies the actual migration to PGlite (PostgreSQL in WASM), w
 ## Sources
 
 - [Supabase React Native authentication](https://supabase.com/docs/guides/auth/quickstarts/react-native)
+- [Supabase authentication email templates](https://supabase.com/docs/guides/auth/auth-email-templates)
+- [Supabase SMS provider setup](https://supabase.com/docs/guides/auth/phone-login)
 - [Supabase row-level security](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [Expo SDK 58 SecureStore](https://docs.expo.dev/versions/v58.0.0/sdk/securestore/)

@@ -23,8 +23,11 @@ export async function verifyLiveWorkflow(client) {
   await client.query('begin');
   try {
     for (const id of [hr, outsider]) {
-      await client.query(`insert into auth.users(id,aud,role,email,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
-        values($1,'authenticated','authenticated',$2,now(),'{}',$3,now(),now())`, [id, `${id}@example.invalid`, { company_name: `Verification company ${id}` }]);
+      const phone = '1999' + String(BigInt('0x' + id.slice(-12)) % 10000000n).padStart(7, '0');
+      await client.query(`insert into auth.users(id,aud,role,email,email_confirmed_at,phone,phone_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
+        values($1,'authenticated','authenticated',$2,now(),$3,now(),'{}',$4,now(),now())`, [id, `${id}@example.invalid`, phone, {
+        company_name: `Verification company ${id}`, company_type: 'limited_company', tpin: '0123456789', registration_phone: '+' + phone,
+      }]);
     }
     await as(hr);
     await client.query('select public.hr_activate_workspace()');

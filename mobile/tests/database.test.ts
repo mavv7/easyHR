@@ -10,7 +10,8 @@ test('database isolation, authorization and atomic leave workflow', async t => {
   const ids = { hr: '00000000-0000-4000-8000-000000000001', employee: '00000000-0000-4000-8000-000000000002', manager: '00000000-0000-4000-8000-000000000003', outsider: '00000000-0000-4000-8000-000000000004' };
   try {
     await db.exec(`create role anon; create role authenticated; create schema auth;
-      create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz, raw_user_meta_data jsonb);
+      create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz, raw_user_meta_data jsonb,
+        phone text, phone_confirmed_at timestamptz);
       create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
       grant usage on schema auth to authenticated, anon; grant execute on function auth.uid() to authenticated, anon;`);
     await db.exec(await readFile(new URL('../supabase/migrations/202611180001_hr_foundation.sql', import.meta.url), 'utf8'));
@@ -19,21 +20,45 @@ test('database isolation, authorization and atomic leave workflow', async t => {
     await db.exec(await readFile(new URL('../supabase/migrations/202611180004_pending_requests.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611180005_contracts_payroll.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../supabase/migrations/202611190006_company_settings.sql', import.meta.url), 'utf8'));
-    for (const [id, name, company] of [[ids.hr, 'hr', 'Mango Studio'], [ids.outsider, 'outsider', 'Other company']]) {
-      await db.query('insert into auth.users values ($1, $2, null, $3)', [id, name + '@example.com', { company_name: company }]);
-    }
+    await db.query('insert into auth.users values ($1, $2, null, $3)', [ids.outsider, 'outsider@example.com', { company_name: 'Other company' }]);
+    await db.exec(await readFile(new URL('../supabase/migrations/202611190007_company_signup_otp.sql', import.meta.url), 'utf8'));
+    const registration = { company_name: 'Mango Studio', company_type: 'limited_company', tpin: '0123456789', registration_phone: '+260971234567' };
+    await assert.rejects(db.query("insert into auth.users values (gen_random_uuid(), 'legacy@example.com', null, $1)", [
+      { company_name: 'Missing details' },
+    ]), /company type, 10-digit TPIN/);
+    await assert.rejects(db.query("insert into auth.users values (gen_random_uuid(), 'invalid@example.com', null, $1)", [
+      { ...registration, tpin: '123' },
+    ]), /10-digit TPIN/);
+    await db.query('insert into auth.users values ($1, $2, null, $3)', [ids.hr, 'hr@example.com', registration]);
     await assert.rejects(db.query("insert into auth.users values (gen_random_uuid(), 'uninvited@example.com', null, '{}')"), /approval required/);
     async function as(user: string) { await db.exec('reset role'); await db.query("select set_config('request.jwt.claim.sub', $1, false)", [user]); await db.exec('set role authenticated'); }
     async function scalar(sql: string, args: unknown[] = []) { const r = await db.query<Record<string, string>>(sql, args); return Object.values(r.rows[0])[0]; }
     await as(ids.hr);
     await db.query('select public.hr_activate_workspace()');
     assert.equal((await db.query('select * from public.hr_organizations')).rows.length, 0);
+    assert.equal(await scalar('select public.hr_pending_company_phone()'), null);
     await assert.rejects(db.query("select easyhr_private.hr_create_organization('Bypass')"), /permission denied/);
     await db.exec('reset role; update auth.users set email_confirmed_at = now()');
     await as(ids.hr);
     await db.query('select public.hr_activate_workspace()');
+    assert.equal((await db.query('select * from public.hr_organizations')).rows.length, 0);
+    assert.equal(await scalar('select public.hr_pending_company_phone()'), '+260971234567');
+    await db.exec('reset role');
+    await db.query("update auth.users set phone = '260977654321' where id = $1", [ids.hr]);
+    await as(ids.hr);
+    await db.query('select public.hr_activate_workspace()');
+    assert.equal((await db.query('select * from public.hr_organizations')).rows.length, 0);
+    await db.exec('reset role');
+    await db.query('update auth.users set phone_confirmed_at = now() where id = $1', [ids.hr]);
+    await as(ids.hr);
+    await db.query('select public.hr_activate_workspace()');
     await db.query('select public.hr_activate_workspace()');
     assert.equal((await db.query('select * from public.hr_organizations')).rows.length, 1);
+    assert.equal(await scalar('select public.hr_pending_company_phone()'), null);
+    assert.equal(await scalar('select company_type from public.hr_company_settings'), 'limited_company');
+    assert.equal(await scalar("select profile->>'email' from public.hr_company_settings"), 'hr@example.com');
+    assert.equal(await scalar("select profile->>'phone' from public.hr_company_settings"), '+260977654321');
+    assert.equal(await scalar("select profile->>'tpin' from public.hr_company_settings"), '0123456789');
     const org = await scalar('select id from public.hr_organizations');
     await db.query("select public.hr_add_member($1, 'manager@example.com', 'manager')", [org]);
     await db.exec('reset role');

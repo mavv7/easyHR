@@ -3,6 +3,7 @@ import { setStringAsync } from 'expo-clipboard';
 import { Pressable, Text, View } from 'react-native';
 import { CompanyProfile, CompanySettings, loadCompanySettings, NumberingPolicy, PayPoint, rpc } from './api';
 import { companyDateKey } from './leaveCalendar';
+import { companyTypes } from './companyRegistration';
 import { Button, Field, s } from './workspaceDesign';
 
 type Settings = Awaited<ReturnType<typeof loadCompanySettings>>;
@@ -126,6 +127,7 @@ function ProfileForm({ settings, busy, save, feedback }: FormFeedback & { settin
   const [copyStatus, setCopyStatus] = useState('');
   const [error, setError] = useState('');
   const missing = Object.entries(missingFields).filter(([key]) => !settings.profile[key as ProfileText]?.trim());
+  const companyType = companyTypes.find(([key]) => key === settings.company_type)?.[1];
   function field(key: ProfileText, label: string, inputMode?: 'tel' | 'email' | 'numeric') {
     return <Field label={label} value={profile[key] ?? ''} inputMode={inputMode}
       onChange={value => setProfile(previous => ({ ...previous, [key]: value }))} />;
@@ -165,6 +167,10 @@ function ProfileForm({ settings, busy, save, feedback }: FormFeedback & { settin
         <View key={key} style={[s.badge, s.badgePending]}><Text style={s.label}>{label}</Text></View>)}</View>
     </View>}
     <Field label="Company name" value={name} onChange={setName} />
+    {!!companyType && <View style={{ gap: 6 }}>
+      <Text style={s.label}>Company type</Text>
+      <Text style={s.subtitle}>{companyType}</Text>
+    </View>}
     {field('phone', 'Phone', 'tel')}
     {field('address', 'Official address')}
     {field('city', 'Town or city')}

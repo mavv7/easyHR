@@ -61,6 +61,7 @@ try {
       '202611180004_pending_requests.sql',
       '202611180005_contracts_payroll.sql',
       '202611190006_company_settings.sql',
+      '202611190007_company_signup_otp.sql',
     ]) {
       const version = file.split('_')[0];
       const migration = await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8');

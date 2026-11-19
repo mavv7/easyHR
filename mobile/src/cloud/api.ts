@@ -17,7 +17,7 @@ export type NumberingPolicy = {
   include_year: boolean; include_branch: boolean; separate_number: boolean;
 };
 export type PayPoint = { id: string; name: string; code: string | null };
-export type CompanySettings = NumberingPolicy & { profile: CompanyProfile; profile_version: number; numbering_version: number };
+export type CompanySettings = NumberingPolicy & { profile: CompanyProfile; profile_version: number; numbering_version: number; company_type?: string | null };
 export type Snapshot = { employees: CloudEmployee[]; leave: CloudLeave[]; members: Member[]; audit: Audit[]; invitations: Invitation[] | null; payPoints: PayPoint[] };
 export const emptySnapshot: Snapshot = { employees: [], leave: [], members: [], audit: [], invitations: null, payPoints: [] };
 
