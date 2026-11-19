@@ -1,4 +1,5 @@
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, View } from 'react-native';
+import { Text } from '../typography';
 import { router, useLocalSearchParams } from 'expo-router';
 import Demo from '../App';
 import CloudApp from '../cloud/CloudApp';

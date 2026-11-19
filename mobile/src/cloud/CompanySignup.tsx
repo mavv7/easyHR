@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
+import { Text } from '../typography';
 import { supabase } from './client';
 import { companyTypes, registrationPhone } from './companyRegistration';
 import { Button, Field, s } from './workspaceDesign';

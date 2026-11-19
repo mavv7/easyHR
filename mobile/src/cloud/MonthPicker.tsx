@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
+import { Text } from '../typography';
 import { calendarMonth, companyDateKey, isDateKey } from './leaveCalendar';
 import { Button, Field, s } from './workspaceDesign';
 

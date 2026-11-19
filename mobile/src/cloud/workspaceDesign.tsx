@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from 'react';
-import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Text, TextInput } from '../typography';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export const colors = {
@@ -8,7 +9,6 @@ export const colors = {
   copper: '#9B3C14', line: '#E9E0D6', error: '#A23026',
 };
 
-const serif = Platform.select({ web: 'Georgia, serif', ios: 'Georgia', default: 'serif' });
 export const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.canvas },
   body: { flex: 1, minWidth: 0 },
@@ -27,10 +27,10 @@ export const s = StyleSheet.create({
   authWide: { flexDirection: 'row', minHeight: 620 },
   authForm: { flex: 1, gap: 14, padding: 22, justifyContent: 'center' },
   authFormWide: { padding: 38 },
-  title: { fontFamily: serif, fontWeight: '400', fontSize: 38, letterSpacing: -1.6, color: colors.ink },
+  title: { fontWeight: '400', fontSize: 38, letterSpacing: -1.6, color: colors.ink },
   hero: { backgroundColor: colors.orangeLight, borderWidth: 1, borderColor: '#F0D5C2', borderRadius: 20, padding: 21, overflow: 'hidden', minHeight: 112, justifyContent: 'center', gap: 4 },
   heroWide: { minHeight: 130, padding: 26 },
-  heroTitle: { color: colors.ink, fontFamily: serif, fontSize: 36, letterSpacing: -1.2, fontWeight: '400' },
+  heroTitle: { color: colors.ink, fontSize: 36, letterSpacing: -1.2, fontWeight: '400' },
   heroMeta: { color: '#603A29', fontSize: 13, lineHeight: 20 },
   heading: { fontSize: 21, color: colors.ink, letterSpacing: -0.45, fontWeight: '700' },
   subtitle: { fontSize: 14, color: colors.muted, lineHeight: 22 },
@@ -62,7 +62,7 @@ export const s = StyleSheet.create({
   loading: { padding: 30, color: colors.ink },
   metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   metric: { flexGrow: 1, flexBasis: 138, minWidth: 0, gap: 5, backgroundColor: colors.limeLight, borderRadius: 13, padding: 15 },
-  metricValue: { color: colors.ink, fontFamily: serif, fontSize: 31, fontVariant: ['tabular-nums'] },
+  metricValue: { color: colors.ink, fontSize: 31, fontVariant: ['tabular-nums'] },
   badge: { alignSelf: 'flex-start', borderRadius: 20, paddingVertical: 5, paddingHorizontal: 9, backgroundColor: colors.limeLight },
   badgeText: { color: colors.ink, fontSize: 12, fontWeight: '700' },
   badgePending: { backgroundColor: colors.orangeLight },
@@ -210,7 +210,7 @@ const internal = StyleSheet.create({
   mark: { width: 38, height: 38 },
   cover: { overflow: 'hidden', backgroundColor: colors.orangeLight, minHeight: 168, gap: 25, padding: 24, justifyContent: 'space-between' },
   coverWide: { flexBasis: '43%', padding: 36 },
-  coverTitle: { color: colors.ink, fontFamily: serif, fontSize: 31, letterSpacing: -0.8 },
+  coverTitle: { color: colors.ink, fontSize: 31, letterSpacing: -0.8 },
   coverTitleWide: { fontSize: 54, lineHeight: 57, letterSpacing: -2 },
   art: { position: 'absolute', right: -45, top: -53, width: 252, height: 252, alignItems: 'center', justifyContent: 'center' },
   ring: { position: 'absolute', borderWidth: 1, borderColor: '#ED631C33', borderRadius: 140 },

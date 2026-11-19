@@ -2,7 +2,8 @@ import { useRef, useState } from 'react';
 import { getDocumentAsync } from 'expo-document-picker';
 import { File, Paths } from 'expo-file-system';
 import { isAvailableAsync, shareAsync } from 'expo-sharing';
-import { Platform, Text, View } from 'react-native';
+import { Platform, View } from 'react-native';
+import { Text } from '../typography';
 import { rpc } from './api';
 import { Button, s } from './workspaceDesign';
 

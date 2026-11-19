@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, Pressable, TextInput, Modal, StyleSheet, useWindowDimensions, Platform, KeyboardAvoidingView } from 'react-native';
+import { View, ScrollView, Pressable, Modal, StyleSheet, useWindowDimensions, Platform, KeyboardAvoidingView } from 'react-native';
+import { Text, TextInput } from './typography';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useLocalSearchParams } from 'expo-router';

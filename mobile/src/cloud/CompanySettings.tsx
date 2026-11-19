@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { setStringAsync } from 'expo-clipboard';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, View } from 'react-native';
+import { Text } from '../typography';
 import { CompanyProfile, CompanySettings, loadCompanySettings, NumberingPolicy, PayPoint, rpc } from './api';
 import { companyDateKey } from './leaveCalendar';
 import { companyTypes } from './companyRegistration';

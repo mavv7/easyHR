@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
+import { Text } from '../typography';
 import { money } from '../domain';
 import { rpc, type Member, type Snapshot } from './api';
 import { companyDateKey, isDateKey } from './leaveCalendar';
