@@ -4,7 +4,7 @@ import { Pressable, Text, View } from 'react-native';
 import { CompanyProfile, CompanySettings, loadCompanySettings, NumberingPolicy, PayPoint, rpc } from './api';
 import { companyDateKey } from './leaveCalendar';
 import { companyTypes } from './companyRegistration';
-import { Button, Field, s } from './workspaceDesign';
+import { Button, Field, FieldPair, s } from './workspaceDesign';
 
 type Settings = Awaited<ReturnType<typeof loadCompanySettings>>;
 type Save = (name: string, args: Record<string, unknown>, success: string) => Promise<boolean>;
@@ -171,20 +171,16 @@ function ProfileForm({ settings, busy, save, feedback }: FormFeedback & { settin
       <Text style={s.label}>Company type</Text>
       <Text style={s.subtitle}>{companyType}</Text>
     </View>}
-    {field('phone', 'Phone', 'tel')}
+    <FieldPair first={field('phone', 'Phone', 'tel')} second={field('email', 'Company email', 'email')} />
     {field('address', 'Official address')}
-    {field('city', 'Town or city')}
-    {field('email', 'Company email', 'email')}
+    <FieldPair first={field('city', 'Town or city')} second={field('postal_address', 'Postal address')} />
     <Text accessibilityRole="header" style={s.heading}>Employer particulars for contracts</Text>
-    {field('legal_name', 'Registered legal name')}
-    {field('trading_name', 'Trading name (if different)')}
+    <FieldPair first={field('legal_name', 'Registered legal name')} second={field('trading_name', 'Trading name (if different)')} />
     {field('registration_number', 'Company registration number')}
-    {field('postal_address', 'Postal address')}
     <Select label="Industry" options={[['', 'Select an industry'], ...industries.map(item => [item, item])]}
       value={profile.industry ?? ''} onChange={industry => setProfile(previous => ({ ...previous, industry }))} />
     {field('business', 'Nature of the business')}
-    {field('signatory', 'Person who signs contracts')}
-    {field('signatory_title', 'Signatory position')}
+    <FieldPair first={field('signatory', 'Person who signs contracts')} second={field('signatory_title', 'Signatory position')} />
     <Text accessibilityRole="header" style={s.heading}>Work and pay schedule</Text>
     <Text style={s.label}>Ordinary working days</Text>
     <View style={s.row}>{weekdays.map((day, index) => {
@@ -247,10 +243,12 @@ function NumberingForm({ settings, payPoints, busy, save, feedback }: FormFeedba
     <Select label="Numbering method" options={[[ 'auto', 'Generate automatically' ], [ 'manual', 'Enter numbers manually' ]]}
       value={draft.automatic ? 'auto' : 'manual'} onChange={method => setDraft(previous => ({ ...previous, automatic: method === 'auto' }))} />
     {draft.automatic && <>
-      <Field label="Prefix" value={draft.prefix} onChange={prefix => setDraft(previous => ({ ...previous, prefix }))} />
-      <Field label="Separator" value={draft.separator} onChange={separator => setDraft(previous => ({ ...previous, separator }))} />
-      <Field label="Number length" value={digits} onChange={setDigits} inputMode="numeric" />
-      <Field label="Next number" value={next} onChange={setNext} inputMode="numeric" />
+      <FieldPair
+        first={<Field label="Prefix" value={draft.prefix} onChange={prefix => setDraft(previous => ({ ...previous, prefix }))} />}
+        second={<Field label="Separator" value={draft.separator} onChange={separator => setDraft(previous => ({ ...previous, separator }))} />}
+      />
+      <FieldPair first={<Field label="Number length" value={digits} onChange={setDigits} inputMode="numeric" />}
+        second={<Field label="Next number" value={next} onChange={setNext} inputMode="numeric" />} />
       {(Object.keys(toggles) as (keyof typeof toggles)[]).map(key =>
         <Choice key={key} label={toggles[key]} selected={draft[key]}
           onPress={() => setDraft(previous => ({ ...previous, [key]: !previous[key] }))} />)}
@@ -284,8 +282,8 @@ function PayPointsForm({ payPoints, busy, save, feedback }: FormFeedback & { pay
   return <View style={s.card}>
     <Text accessibilityRole="header" style={s.heading}>Pay points</Text>
     <Text style={s.subtitle}>Add branches or payment locations for employee records.</Text>
-    <Field label="Pay point name" value={name} onChange={setName} />
-    <Field label="Code (optional)" value={code} onChange={setCode} />
+    <FieldPair first={<Field label="Pay point name" value={name} onChange={setName} />}
+      second={<Field label="Code (optional)" value={code} onChange={setCode} />} />
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     {feedback}
     <Button label="Add pay point" disabled={busy} onPress={() => void submit()} />

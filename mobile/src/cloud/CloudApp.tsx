@@ -271,7 +271,7 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
     if (validRange && (leave.end_date < from || (through && leave.start_date > through))) return false;
     return matchesRequest(leave, leaveQuery);
   }) : [];
-  const navigation = <WorkspaceNav tabs={org ? tabs : []} active={showAccount ? '' : tab} count={approvals.length} wide={wide}
+  const navigation = <WorkspaceNav tabs={org ? tabs : []} active={showAccount ? '' : tab} count={approvals.length} wide={wide} company={currentName}
     onSelect={name => { setShowAccount(false); if (name === 'People') setProfileId(null); openTab(name); }} />;
   if (pendingPhone) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
     <Brand />
@@ -288,32 +288,28 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   </ScrollView>;
   return <View style={[s.frame, wide && s.desktop]}>
     {wide && navigation}
-    <ScrollView ref={workspaceScroll} style={s.body} keyboardShouldPersistTaps="handled" contentContainerStyle={[s.content, wide && s.contentWide]}>
-    {!wide && <Brand />}
-    <View style={s.cardHeader}>
-      <View style={s.row}>
-        <View style={s.avatar}><Text style={s.avatarText}>{session.user.email?.slice(0, 2).toUpperCase() || 'HR'}</Text></View>
-        <View style={s.identity}>
-          <Text style={s.label}>{session.user.email}</Text>
-          <Text style={s.small}>{membership?.role?.toUpperCase() || 'No company role yet'}</Text>
+    <View style={s.page}>
+    <View style={s.topbar}>
+      <View style={[s.topbarInner, wide && s.topbarWide]}>
+        {!wide && <Brand compact />}
+        <View style={s.topbarIdentity}>
+          <Text numberOfLines={1} style={s.label}>{currentName || 'easyHR workspace'}</Text>
+          <Text numberOfLines={1} style={s.small}>{membership ? { hr: 'HR administrator', manager: 'Manager', employee: 'Employee' }[membership.role] : 'Company access'}</Text>
+        </View>
+        <View style={s.topbarActions}>
+          {!showAccount && <Button label={fetching ? 'Refreshing…' : 'Refresh'} onPress={() => void refresh()} disabled={fetching || busy} secondary />}
+          <Button label={showAccount ? 'Done' : 'Account'} onPress={() => setShowAccount(!showAccount)} disabled={busy} secondary selected={showAccount} />
         </View>
       </View>
-      <View style={s.row}>
-        {!showAccount && <Button label={fetching ? 'Refreshing…' : 'Refresh'} onPress={() => void refresh()} disabled={fetching || busy} secondary />}
-        <Button label={showAccount ? 'Back to workspace' : 'Account'} onPress={() => setShowAccount(!showAccount)} disabled={busy} secondary />
-        <Button label="Sign out" disabled={busy} secondary onPress={() => void act(async () => {
-          const { error } = await supabase!.auth.signOut({ scope: 'local' });
-          if (error) throw error;
-        }, 'Signed out')} />
-      </View>
     </View>
+    <ScrollView ref={workspaceScroll} style={s.body} keyboardShouldPersistTaps="handled" contentContainerStyle={[s.content, wide && s.contentWide]}>
     <View style={[s.hero, wide && s.heroWide]}>
       <Rings />
       <Text accessibilityRole="header" style={s.heroTitle}>{showAccount ? 'Account' : tab}</Text>
-      <Text style={s.heroMeta}>{currentName || 'Your workspace'} · Zambia · ZMW</Text>
+      <Text style={s.heroMeta}>{showAccount ? session.user.email : 'Zambia · ZMW'}</Text>
     </View>
     {!!message && <Text accessibilityRole="alert" style={s.message}>{message}</Text>}
-    {showAccount && <AccountSettings busy={busy}
+    {showAccount && <><AccountSettings busy={busy}
       onPasswordChange={(currentPassword, password) => act(async () => {
         const { error } = await supabase!.auth.updateUser({ current_password: currentPassword, password });
         if (error) throw error;
@@ -321,7 +317,12 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
       onEndOtherSessions={() => act(async () => {
         const { error } = await supabase!.auth.signOut({ scope: 'others' });
         if (error) throw error;
-      }, 'Other sessions were signed out')} />}
+      }, 'Other sessions were signed out')} />
+      <View style={s.row}><Button label="Sign out" disabled={busy} secondary onPress={() => void act(async () => {
+        const { error } = await supabase!.auth.signOut({ scope: 'local' });
+        if (error) throw error;
+      }, 'Signed out')} /></View>
+    </>}
     {!showAccount && !org && !fetching && <View style={s.card}><Text style={s.heading}>Waiting for company access</Text><Text style={s.subtitle}>Confirm your work email or ask your HR administrator to authorize access, then refresh.</Text></View>}
     {!showAccount && !!org && <>
       {organizations.length > 1 && <View style={s.row}>{organizations.map(o => <Button key={o.id} label={o.name} disabled={busy || fetching} secondary={org !== o.id} onPress={() => {
@@ -465,6 +466,7 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
     </>}
     </ScrollView>
     {!wide && !!org && navigation}
+    </View>
   </View>;
 }
 type SaveForm = { busy: boolean; onCancel: () => void; onSave: (values: Record<string, unknown>) => Promise<void> };
@@ -668,7 +670,7 @@ function RegisterEditor({ title, busy, children, onClose }: {
 
 function RegisterFeedback({ message, tone }: { message: string; tone: 'error' | 'notice' | 'loading' }) {
   return <View style={[s.feedback, tone === 'error' && s.feedbackError]}>
-    {tone === 'loading' && <ActivityIndicator size="small" color={colors.forest} />}
+    {tone === 'loading' && <ActivityIndicator size="small" color={colors.copper} />}
     <Text accessibilityRole={tone === 'error' ? 'alert' : undefined} accessibilityLiveRegion="polite"
       style={[tone === 'error' ? s.error : s.subtitle, { flex: 1 }]}>{message}</Text>
   </View>;
@@ -1169,7 +1171,7 @@ const calendarStyles = StyleSheet.create({
   week: { flexDirection: 'row', gap: 2 },
   weekday: { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: '600', color: colors.muted },
   day: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
-  selected: { backgroundColor: colors.sage, borderWidth: 1, borderColor: colors.forest },
+  selected: { backgroundColor: colors.limeLight, borderWidth: 1, borderColor: colors.copper },
   count: { fontSize: 11, fontWeight: '700', color: colors.copper },
 });
 
