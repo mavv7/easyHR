@@ -64,6 +64,9 @@ try {
       '202611190007_company_signup_otp.sql',
       '202611190008_employee_onboarding.sql',
       '202611190009_zambia_payroll.sql',
+      '202611190010_payroll_review.sql',
+      '202611190011_hr_operations.sql',
+      '202611190012_workflow_documents.sql',
     ]) {
       const version = file.split('_')[0];
       const migration = await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8');

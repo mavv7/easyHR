@@ -107,7 +107,7 @@ export function AuthCover({ wide }: { wide: boolean }) {
 }
 
 const navigationGroups = [
-  { label: 'Home', items: ['Overview', 'Today'] },
+  { label: 'Home', items: ['Overview', 'Today', 'Workflows'] },
   { label: 'People', items: ['People', 'Leave', 'Calendar', 'Approvals', 'Attendance', 'Contracts'] },
   { label: 'Pay and compliance', items: ['Payroll', 'Compliance'] },
   { label: 'Workspace', items: ['Activity', 'Workspace', 'Settings'] },
@@ -115,11 +115,12 @@ const navigationGroups = [
 const marks: Record<string, string> = {
   Overview: '\u25C8', Today: '\u25C8', People: '\u25C9', Leave: '\u2197', Calendar: '\u25A6', Approvals: '\u2713',
   Contracts: '\u25A4', Payroll: '\u25A3', Activity: '\u223F', Workspace: '\u25CE', Settings: '\u2699',
-  Attendance: '\u25F7', Compliance: '\u25C7',
+  Attendance: '\u25F7', Compliance: '\u25C7', Workflows: '\u25A6',
 };
 const navigationAliases: Record<string, string> = {
   Overview: 'dashboard today', Today: 'dashboard overview', People: 'staff files employee directory',
   Settings: 'company profile numbering pay points',
+  Workflows: 'payroll review finance payslips reconciliation attendance timesheets renewals probation onboarding offboarding tasks',
 };
 
 export function WorkspaceNav({ tabs, active, count, wide, company, countTab = 'Approvals', onSelect }: {

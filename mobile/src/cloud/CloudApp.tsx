@@ -7,6 +7,8 @@ import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth, companyDateKey, isDateKey, monthlyAgenda } from './leaveCalendar';
 import { contractEndStatus } from './contractDates';
 import { suggestZambiaDeductions } from './zambiaPayroll';
+import { WorkflowWorkspace } from './WorkflowWorkspace';
+import { WorkflowDocument } from './WorkflowDocument';
 import { CompanySettingsScreen } from './CompanySettings';
 import { CompanySignup, EmployeeSignIn, PhoneVerification } from './CompanySignup';
 import { zambianMobile } from './companyRegistration';
@@ -197,9 +199,9 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   const [leaveThrough, setLeaveThrough] = useState('');
   const generation = useRef(0), mounted = useRef(true), mutation = useRef(false);
   const workspaceScroll = useRef<ComponentRef<typeof ScrollView>>(null);
-  const params = useLocalSearchParams<{ cloudtab?: string }>();
+  const params = useLocalSearchParams<{ cloudtab?: string; workflow?: string; workflowMonth?: string }>();
   const membership = snapshot.members.find(m => m.user_id === session.user.id), isHR = membership?.role === 'hr';
-  const tabs = ['Overview', 'People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Contracts', 'Payroll', 'Activity', 'Workspace', 'Settings'] : [])];
+  const tabs = ['Overview', 'People', 'Leave', 'Calendar', ...(isHR || membership?.role === 'manager' ? ['Approvals'] : []), ...(isHR ? ['Contracts', 'Payroll'] : []), 'Workflows', ...(isHR ? ['Activity', 'Workspace', 'Settings'] : [])];
   const tab = tabs.find(name => name === params.cloudtab) ?? 'Overview';
   useEffect(() => { workspaceScroll.current?.scrollTo({ y: 0, animated: false }); }, [tab, org, showAccount]);
   const refresh = useCallback(async () => {
@@ -238,7 +240,12 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   function openTab(name: string) {
     setEditor(null);
     setShowLeave(false);
-    router.setParams({ cloudtab: name });
+    router.setParams({ cloudtab: name, workflow: '', workflowMonth: '' });
+  }
+  function openWorkflow(section: string, month?: string) {
+    setEditor(null);
+    setShowLeave(false);
+    router.setParams({ cloudtab: 'Workflows', workflow: section, workflowMonth: month ?? '' });
   }
   const userEmail = session.user.email?.toLowerCase();
   function canDecide(employee: CloudEmployee | undefined) {
@@ -342,7 +349,8 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
         setLeaveThrough('');
         setOrg(o.id);
       }} />)}</View>}
-      {tab === 'Overview' && <WorkspaceOverview snapshot={snapshot} approvalCount={approvals.length} canApprove={tabs.includes('Approvals')}
+      {tab === 'Overview' && <WorkspaceOverview key={org} org={org} snapshot={snapshot} approvalCount={approvals.length} canApprove={tabs.includes('Approvals')}
+        openWorkflow={openWorkflow}
         userId={session.user.id} openTab={name => {
           if (name === 'People') setProfileId(null);
           if (name === 'Leave') setLeaveEmployee(null);
@@ -449,7 +457,10 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
       </View>}
       {tab === 'Calendar' && <LeaveCalendar key={org} requests={snapshot.leave} employees={employeesById} />}
       {tab === 'Contracts' && isHR && <ContractsRegister key={org} org={org} employees={snapshot.employees} />}
-      {tab === 'Payroll' && isHR && <PayrollRegister key={org} org={org} employees={snapshot.employees} payPoints={snapshot.payPoints} />}
+      {tab === 'Payroll' && isHR && <PayrollRegister key={org} org={org} employees={snapshot.employees} payPoints={snapshot.payPoints}
+        onReview={month => openWorkflow('Payroll review', month)} />}
+      {tab === 'Workflows' && membership && <WorkflowWorkspace key={org} org={org} userId={session.user.id} membership={membership}
+        snapshot={snapshot} initialSection={params.workflow} initialMonth={params.workflowMonth} />}
       {tab === 'Activity' && isHR && <ActivityHistory key={org} org={org} snapshot={snapshot} employees={employeesById} user={session.user} />}
       {tab === 'Settings' && isHR && <CompanySettingsScreen key={org} org={org} payPoints={snapshot.payPoints} onSaved={refresh} />}
       {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text>
@@ -585,6 +596,25 @@ const activityLabels: Record<string, string> = {
   'contract.updated': 'Contract updated',
   'contract.reviewed': 'Contract reviewed',
   'payroll.draft_saved': 'Payroll draft saved',
+  'payroll.submit': 'Payroll submitted to Finance',
+  'payroll.return': 'Payroll returned to HR',
+  'payroll.approve': 'Payroll approved and payslips published',
+  'payroll.compensation_scheduled': 'Compensation change scheduled',
+  'payroll.finance_granted': 'Finance review access granted',
+  'payroll.finance_revoked': 'Finance review access revoked',
+  'payroll.overtime_imported': 'Approved overtime imported',
+  'payroll.remittance_recorded': 'Statutory remittance recorded',
+  'payroll.query_opened': 'Payroll query opened',
+  'payroll.query_assigned': 'Payroll query assigned',
+  'payroll.query_resolved': 'Payroll query resolved',
+  'contract.document_uploaded': 'Contract PDF attached',
+  'receipt.document_uploaded': 'Statutory receipt attached',
+  'people.task_created': 'People task assigned',
+  'people.task_completed': 'People task completed',
+  'attendance.cutoff_set': 'Attendance cut-off set',
+  'attendance.submitted': 'Timesheet submitted',
+  'attendance.approved': 'Timesheet approved',
+  'attendance.returned': 'Timesheet returned',
 };
 
 const activityCategories = [
@@ -830,6 +860,7 @@ function ContractsRegister({ org, employees }: { org: string; employees: CloudEm
       <Text style={s.subtitle}>{names.get(contract.employee_id) ?? 'Employee'} · {contract.start_date}{contract.end_date ? ` to ${contract.end_date}` : ''}</Text>
       {contract.basic_minor !== null && <Text style={s.small}>{money(contract.basic_minor)} monthly basic pay</Text>}
       {!!contract.pay_terms && <Text style={s.small}>{contract.pay_terms}</Text>}
+      <WorkflowDocument org={org} record={contract.id} kind="contract" canUpload onUploaded={() => reload()} />
       {contract.reviewed_at && <Text style={s.small}>Internally reviewed {new Date(contract.reviewed_at).toLocaleDateString()}</Text>}
       <View style={s.row}>
         <Button label="Edit" secondary disabled={busy} onPress={() => openEditor(contract)} />
@@ -882,7 +913,7 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
   </View>;
 }
 
-function PayrollRegister({ org, employees, payPoints }: { org: string; employees: CloudEmployee[]; payPoints: PayPoint[] }) {
+function PayrollRegister({ org, employees, payPoints, onReview }: { org: string; employees: CloudEmployee[]; payPoints: PayPoint[]; onReview: (month: string) => void }) {
   const [period, setPeriod] = useState(() => companyDateKey().slice(0, 7));
   const [periodInput, setPeriodInput] = useState(period);
   const [error, setError] = useState('');
@@ -895,6 +926,7 @@ function PayrollRegister({ org, employees, payPoints }: { org: string; employees
   return <View style={s.card}>
     <Text accessibilityRole="header" style={s.heading}>Payroll drafts</Text>
     <Text style={s.small}>Enter monthly basic pay, taxable cash allowances and bonuses in ZMW. Review suggestions for standard employment before processing payroll.</Text>
+    <View style={s.row}><Button label="Review this payroll month" secondary onPress={() => onReview(period)} /></View>
     <View style={s.toolbar}>
       <View style={s.row}>
         <Button label="Previous month" secondary onPress={() => openPeriod(calendarMonth(period, -1))} />
@@ -998,11 +1030,12 @@ const payrollAmountError = 'Enter 0 to 10,000,000 ZMW with up to two decimal pla
 
 function PayrollForm({ employee, period, draft, busy, onCancel, onSave }: SaveForm & { employee: CloudEmployee; period: string; draft?: PayrollDraft }) {
   const [base, setBase] = useState(draft ? (draft.base_minor / 100).toFixed(2) : '');
-  const [allowances, setAllowances] = useState(draft ? ((draft.additional_minor - draft.bonus_minor) / 100).toFixed(2) : '0');
+  const overtime = draft?.overtime_minor ?? 0;
+  const [allowances, setAllowances] = useState(draft ? ((draft.additional_minor - draft.bonus_minor - overtime) / 100).toFixed(2) : '0');
   const [bonus, setBonus] = useState(draft ? (draft.bonus_minor / 100).toFixed(2) : '0');
   const [submitted, setSubmitted] = useState(false);
   const baseMinor = parsePayrollAmount(base), allowanceMinor = parsePayrollAmount(allowances), bonusMinor = parsePayrollAmount(bonus);
-  const additionalMinor = allowanceMinor === null || bonusMinor === null ? null : allowanceMinor + bonusMinor;
+  const additionalMinor = allowanceMinor === null || bonusMinor === null ? null : allowanceMinor + bonusMinor + overtime;
   const validAdditional = additionalMinor !== null && additionalMinor <= 1_000_000_000;
   const estimate = baseMinor !== null && validAdditional ? suggestZambiaDeductions(period, baseMinor, additionalMinor) : null;
   function submit() {
@@ -1015,7 +1048,8 @@ function PayrollForm({ employee, period, draft, busy, onCancel, onSave }: SaveFo
     <Field label="Basic pay (ZMW)" value={base} onChange={setBase} inputMode="decimal" error={submitted && baseMinor === null ? payrollAmountError : undefined} />
     <Field label="Total taxable cash allowances (ZMW)" value={allowances} onChange={setAllowances} inputMode="decimal" error={submitted && allowanceMinor === null ? payrollAmountError : undefined} />
     <Field label="Total taxable bonuses (ZMW)" value={bonus} onChange={setBonus} inputMode="decimal" error={submitted && bonusMinor === null ? payrollAmountError : undefined} />
-    {submitted && additionalMinor !== null && !validAdditional && <Text accessibilityRole="alert" style={s.error}>Allowances and bonuses may total up to 10,000,000 ZMW.</Text>}
+    {overtime > 0 && <Text style={s.small}>Approved overtime · {money(overtime)}</Text>}
+    {submitted && additionalMinor !== null && !validAdditional && <Text accessibilityRole="alert" style={s.error}>Allowances, bonuses and overtime may total up to 10,000,000 ZMW.</Text>}
     {baseMinor !== null && validAdditional && <Text style={s.label}>{money(baseMinor + additionalMinor)} draft gross pay</Text>}
     {estimate && <View style={s.nestedCard}>
       <Text style={s.label}>Suggested statutory deductions</Text>
@@ -1031,14 +1065,27 @@ function PayrollForm({ employee, period, draft, busy, onCancel, onSave }: SaveFo
   </View>;
 }
 
-function WorkspaceOverview({ snapshot, approvalCount, canApprove, userId, openTab, openProfile }: {
+function WorkspaceOverview({ org, snapshot, approvalCount, canApprove, userId, openTab, openProfile, openWorkflow }: {
+  org: string;
   snapshot: Snapshot;
   approvalCount: number;
   canApprove: boolean;
   userId: string;
   openTab: (tab: string) => void;
   openProfile: (id: string) => void;
+  openWorkflow: (section: string, month?: string) => void;
 }) {
+  const [alerts, setAlerts] = useState<{ tasks: number; renewals: number; review_period: string | null } | null>(null);
+  useEffect(() => {
+    if (!org) return;
+    let active = true;
+    void rpc('hr_workflow_alerts', { p_org: org }).then(data => {
+      if (active) setAlerts(data);
+    }, () => {
+      if (active) setAlerts(null);
+    });
+    return () => { active = false; };
+  }, [org]);
   const employee = snapshot.employees.find(entry => entry.user_id === userId);
   const reserved = employee ? snapshot.leave.reduce((days, request) =>
     request.employee_id === employee.id && request.status === 'Pending' ? days + request.days : days, 0) : 0;
@@ -1057,6 +1104,16 @@ function WorkspaceOverview({ snapshot, approvalCount, canApprove, userId, openTa
         <View style={s.row}><Button label="Open your profile" secondary onPress={() => openProfile(employee.id)} /></View>
       </View>}
     </View>
+    {alerts && (alerts.tasks > 0 || alerts.renewals > 0 || alerts.review_period) && <View style={s.nestedCard}>
+      <Text style={s.label}>Workflow alerts</Text>
+      {!!alerts.tasks && <Text style={s.small}>{alerts.tasks} open people tasks due within 14 days or overdue</Text>}
+      {!!alerts.renewals && <Text style={s.small}>{alerts.renewals} contracts ending within 60 days</Text>}
+      <View style={s.row}>
+        {(alerts.tasks > 0 || alerts.renewals > 0) && <Button label="Open people tasks" secondary onPress={() => openWorkflow('People tasks')} />}
+        {alerts.review_period && <Button label="Open payroll awaiting review" secondary
+          onPress={() => openWorkflow('Payroll review', alerts.review_period?.slice(0, 7))} />}
+      </View>
+    </View>}
     <View style={s.row}>
       <Button label="People directory" secondary onPress={() => openTab('People')} />
       <Button label="Leave requests" secondary onPress={() => openTab('Leave')} />
