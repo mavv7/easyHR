@@ -229,12 +229,12 @@ const internal = StyleSheet.create({
   mobileMenu: { width: '88%', maxWidth: 360, flex: 1, paddingHorizontal: 14, paddingTop: 12, gap: 12, backgroundColor: colors.paper },
   menuHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   navIconTile: { width: 32, height: 27, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
-  navIconSelected: { backgroundColor: colors.lime },
+  navIconSelected: { backgroundColor: colors.limeLight },
   navIcon: { color: colors.muted, fontSize: 17, lineHeight: 22 },
   navLabel: { color: colors.muted, fontSize: 12, fontWeight: '600' },
   railLabel: { flex: 1, fontSize: 13 },
-  navActive: { backgroundColor: colors.orangeLight },
-  navActiveText: { color: colors.copper },
+  navActive: { backgroundColor: colors.lime },
+  navActiveText: { color: colors.ink },
   navCount: { backgroundColor: colors.lime, color: colors.ink, borderRadius: 12, fontSize: 11, paddingHorizontal: 6, paddingVertical: 2, fontWeight: '700' },
 });
 
