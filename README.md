@@ -1,12 +1,18 @@
 # easyHR
 
-Native Android and iOS HR application foundation for Zambia, built with React Native, Expo SDK 58 and TypeScript. Orange primary branding with lime accents; responsive layouts for phones and tablets, plus an optional browser preview.
+Zambian HR workspace for Android, iOS and the web, built with React Native, Expo SDK 58 and TypeScript.
 
 ## Supabase workspace
 
-The app now opens with Supabase sign-in and company setup. Connected workflows include HR/manager/employee access, employee creation and editing, account linking, leave requests, atomic approvals and server audit history. The fictional local demo remains available separately from the sign-in screen.
+Sign in to manage people, leave, contracts and payroll. HR, managers, employees and Finance reviewers get access to the records and actions relevant to them. The Overview links directly to payroll drafts, personal records and timesheets.
 
-Follow [Supabase setup](docs/supabase-setup.md) to configure the project, apply the database migration and test the workflow across devices. The integration needs your project URL and publishable key in `mobile/.env.local`. No hosted project is configured automatically.
+- Prepare monthly pay, import approved overtime and send payroll to Finance for review and payslip publication.
+- Track PAYE, NAPSA and NHIMA remittances and attach PDF receipts. Standard monthly payroll approval covers 2026.
+- Manage contract PDFs, leave requests, payroll queries, renewals, probation and onboarding or offboarding tasks.
+
+See the [workflow guide](docs/workflows.md) and [Zambia payroll guide](docs/zambia-payroll.md).
+
+Follow [Supabase setup](docs/supabase-setup.md) to configure the project, apply the database migrations and verify the connected workspace. The app reads the project URL and publishable key from `mobile/.env.local`.
 
 ## Run
 
@@ -31,7 +37,7 @@ Use a compatible Expo Go client for development or configure a signed internal b
 - Compliance task completion and local activity history.
 - Demo state persists on the device using AsyncStorage.
 
-The separate demo uses fictional records in unencrypted local storage and does not sync them. The connected workspace uses Supabase with database-enforced access rules and secure native session storage. Document handling, legal signatures, statutory payroll, payments and filings remain unimplemented. Public holidays, statutory accrual and partial-day leave are not implemented in either mode. See the Supabase setup guide for remaining pilot-readiness requirements.
+The demo uses fictional records stored locally on the device. The connected workspace enforces record access in Supabase and uses secure native session storage. Payroll payments, statutory filings and legal signatures are handled outside easyHR.
 
 ## Checks
 

@@ -9,6 +9,7 @@ import { contractEndStatus } from './contractDates';
 import { suggestZambiaDeductions } from './zambiaPayroll';
 import { WorkflowWorkspace } from './WorkflowWorkspace';
 import { WorkflowDocument } from './WorkflowDocument';
+import { MonthPicker } from './MonthPicker';
 import { CompanySettingsScreen } from './CompanySettings';
 import { CompanySignup, EmployeeSignIn, PhoneVerification } from './CompanySignup';
 import { zambianMobile } from './companyRegistration';
@@ -74,13 +75,13 @@ function SignIn() {
 
   return <View style={{ gap: 15 }}>
     <Text accessibilityRole="header" style={s.title}>Sign in</Text>
-    <Field label="Work email" value={email} onChange={setEmail} />
-    <Field label="Password" value={password} onChange={setPassword} secure />
+    <Field label="Work email" value={email} onChange={setEmail} inputMode="email" disabled={busy} />
+    <Field label="Password" value={password} onChange={setPassword} secure disabled={busy} />
     {!!message && <Text accessibilityRole="alert" style={s.subtitle}>{message}</Text>}
     <Button label={busy ? 'Please wait…' : 'Sign in'} disabled={busy} onPress={() => void authenticate()} />
     <View style={s.row}>
       <Button label="Register a company" disabled={busy} onPress={() => { setMode('company'); setMessage(''); }} secondary />
-      <Button label="Employee sign in" disabled={busy} onPress={() => { setMode('member'); setMessage(''); }} secondary />
+      <Button label="Activate employee access" disabled={busy} onPress={() => { setMode('member'); setMessage(''); }} secondary />
       <Button label="Forgot password?" disabled={busy} onPress={() => setMode('recovery')} secondary />
     </View>
   </View>;
@@ -349,7 +350,7 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
         setLeaveThrough('');
         setOrg(o.id);
       }} />)}</View>}
-      {tab === 'Overview' && <WorkspaceOverview key={org} org={org} snapshot={snapshot} approvalCount={approvals.length} canApprove={tabs.includes('Approvals')}
+      {tab === 'Overview' && <WorkspaceOverview key={org} org={org} snapshot={snapshot} approvalCount={approvals.length} canApprove={tabs.includes('Approvals')} isHR={!!isHR}
         openWorkflow={openWorkflow}
         userId={session.user.id} openTab={name => {
           if (name === 'People') setProfileId(null);
@@ -906,7 +907,7 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
     <Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} error={submitted && !validStart ? 'Enter a valid start date.' : undefined} />
     <Field label="End date (optional, YYYY-MM-DD)" value={end} onChange={setEnd} error={submitted && !validEnd ? 'Enter a valid date on or after the start date.' : undefined} />
     <Field label="Monthly basic pay (optional, ZMW)" value={basic} onChange={setBasic} inputMode="decimal" error={submitted && !validBasic ? payrollAmountError : undefined} />
-    <Field label="Allowances, bonuses, benefits and payment terms" value={payTerms} onChange={setPayTerms} error={submitted && !validPayTerms ? 'Use up to 2,000 characters.' : undefined} />
+    <Field label="Allowances, bonuses, benefits and payment terms" value={payTerms} onChange={setPayTerms} multiline disabled={busy} error={submitted && !validPayTerms ? 'Use up to 2,000 characters.' : undefined} />
     <Text style={s.small}>Record how wages and benefits are calculated and when wages are paid. PAYE, NAPSA and NHIMA apply where required by law.</Text>
     {contract?.reviewed_at && <Text style={s.small}>Saving changes returns the contract to internal review.</Text>}
     <View style={s.row}><Button label={busy ? 'Saving…' : 'Save contract'} disabled={busy} onPress={submit} /><Button label="Cancel" secondary disabled={busy} onPress={onCancel} /></View>
@@ -915,29 +916,11 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
 
 function PayrollRegister({ org, employees, payPoints, onReview }: { org: string; employees: CloudEmployee[]; payPoints: PayPoint[]; onReview: (month: string) => void }) {
   const [period, setPeriod] = useState(() => companyDateKey().slice(0, 7));
-  const [periodInput, setPeriodInput] = useState(period);
-  const [error, setError] = useState('');
-  function openPeriod(month: string) {
-    if (!isDateKey(`${month}-01`)) { setError('Enter a month in YYYY-MM format.'); return; }
-    setError('');
-    setPeriodInput(month);
-    setPeriod(month);
-  }
   return <View style={s.card}>
     <Text accessibilityRole="header" style={s.heading}>Payroll drafts</Text>
     <Text style={s.small}>Enter monthly basic pay, taxable cash allowances and bonuses in ZMW. Review suggestions for standard employment before processing payroll.</Text>
     <View style={s.row}><Button label="Review this payroll month" secondary onPress={() => onReview(period)} /></View>
-    <View style={s.toolbar}>
-      <View style={s.row}>
-        <Button label="Previous month" secondary onPress={() => openPeriod(calendarMonth(period, -1))} />
-        <Button label="Current month" secondary onPress={() => openPeriod(companyDateKey().slice(0, 7))} />
-        <Button label="Next month" secondary onPress={() => openPeriod(calendarMonth(period, 1))} />
-      </View>
-      <View style={s.row}>
-        <View style={s.periodEntry}><Field label="Payroll month (YYYY-MM)" value={periodInput} onChange={value => { setPeriodInput(value); setError(''); }} error={error} /></View>
-        <Button label="Open month" secondary onPress={() => openPeriod(periodInput.trim())} />
-      </View>
-    </View>
+    <MonthPicker period={period} onChange={setPeriod} />
     <PayrollMonth key={period} org={org} period={period} employees={employees} payPoints={payPoints} />
   </View>;
 }
@@ -969,7 +952,7 @@ function PayrollMonth({ org, period, employees, payPoints }: { org: string; peri
     return [employee.name, employee.department, employee.staff_number].join(' ').toLocaleLowerCase().includes(query);
   });
   return <>
-    <View style={s.cardHeader}><Text style={s.heading}>{month}</Text><Button label="Refresh drafts" secondary disabled={busy} onPress={() => reload()} /></View>
+    <View style={s.row}><Button label="Refresh drafts" secondary disabled={busy} onPress={() => reload()} /></View>
     {!!error && !editor && <RegisterFeedback message={error} tone="error" />}
     {!!notice && <RegisterFeedback message={notice} tone="notice" />}
     {!records && !error && <RegisterFeedback message="Loading payroll drafts…" tone="loading" />}
@@ -1065,11 +1048,12 @@ function PayrollForm({ employee, period, draft, busy, onCancel, onSave }: SaveFo
   </View>;
 }
 
-function WorkspaceOverview({ org, snapshot, approvalCount, canApprove, userId, openTab, openProfile, openWorkflow }: {
+function WorkspaceOverview({ org, snapshot, approvalCount, canApprove, isHR, userId, openTab, openProfile, openWorkflow }: {
   org: string;
   snapshot: Snapshot;
   approvalCount: number;
   canApprove: boolean;
+  isHR: boolean;
   userId: string;
   openTab: (tab: string) => void;
   openProfile: (id: string) => void;
@@ -1115,6 +1099,9 @@ function WorkspaceOverview({ org, snapshot, approvalCount, canApprove, userId, o
       </View>
     </View>}
     <View style={s.row}>
+      {isHR && <Button label="Open payroll drafts" onPress={() => openTab('Payroll')} />}
+      {employee && <Button label="My payslips and contracts" secondary onPress={() => openWorkflow('My records')} />}
+      {employee && <Button label="My timesheet" secondary onPress={() => openWorkflow('Attendance')} />}
       <Button label="People directory" secondary onPress={() => openTab('People')} />
       <Button label="Leave requests" secondary onPress={() => openTab('Leave')} />
       <Button label="Leave calendar" secondary onPress={() => openTab('Calendar')} />

@@ -252,17 +252,17 @@ export function FieldPair({ first, second }: { first: ReactNode; second: ReactNo
   </View>;
 }
 
-export function Field({ label, value, onChange, secure = false, error, inputMode }: {
+export function Field({ label, value, onChange, secure = false, error, inputMode, multiline, disabled }: {
   label: string; value: string; onChange: (v: string) => void; secure?: boolean;
-  error?: string; inputMode?: 'decimal' | 'numeric' | 'email' | 'tel';
+  error?: string; inputMode?: 'decimal' | 'numeric' | 'email' | 'tel'; multiline?: boolean; disabled?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
   return <View style={{ gap: 6 }}>
     <Text style={s.label}>{label}</Text>
     <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} secureTextEntry={secure}
-      inputMode={inputMode} accessibilityHint={error}
+      inputMode={inputMode} accessibilityHint={error} editable={!disabled} multiline={multiline}
       autoCapitalize="none" autoCorrect={false} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-      selectionColor={colors.lime} style={[s.input, focused && s.inputFocused, error && s.inputError]} />
+      selectionColor={colors.lime} style={[s.input, multiline && { minHeight: 100, textAlignVertical: 'top' }, focused && s.inputFocused, error && s.inputError]} />
     {!!error && <Text accessibilityRole="alert" style={s.fieldError}>{error}</Text>}
   </View>;
 }

@@ -6,6 +6,7 @@ import { companyDateKey, isDateKey } from './leaveCalendar';
 import { Button, Field, s } from './workspaceDesign';
 import { suggestZambiaDeductions } from './zambiaPayroll';
 import { WorkflowDocument } from './WorkflowDocument';
+import { MonthPicker, monthName } from './MonthPicker';
 
 type Pay = {
   employee_id: string; name: string; basic: number | null; additional: number | null; bonus: number | null; overtime: number | null;
@@ -33,7 +34,7 @@ type Operations = {
 };
 type Action = (name: string, values: Record<string, unknown>) => Promise<void>;
 type Choice = { label: string; value: string };
-type Input = { key: string; label: string; initial?: string; choices?: Choice[] };
+type Input = { key: string; label: string; initial?: string; choices?: Choice[]; pick?: boolean; multiline?: boolean; inputMode?: 'decimal' | 'numeric' };
 type Editor = { title: string; inputs: Input[]; save: (values: Record<string, string>) => Promise<void> };
 
 const options = (values: readonly string[]) => values.map(value => ({ label: value, value }));
@@ -64,7 +65,9 @@ const message = (error: unknown) => {
 };
 
 function WorkflowForm({ editor, onClose }: { editor: Editor; onClose: () => void }) {
-  const [values, setValues] = useState(() => Object.fromEntries(editor.inputs.map(input => [input.key, input.initial ?? input.choices?.[0]?.value ?? ''])));
+  const [values, setValues] = useState(() => Object.fromEntries(editor.inputs.map(input => [
+    input.key, input.initial ?? (input.pick ? '' : input.choices?.[0]?.value ?? ''),
+  ])));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -80,28 +83,51 @@ function WorkflowForm({ editor, onClose }: { editor: Editor; onClose: () => void
   }
   return <View style={s.nestedCard}>
     <Text style={s.heading}>{editor.title}</Text>
-    {editor.inputs.map(input => input.choices ? <View key={input.key} style={s.form}>
-      <Text style={s.label}>{input.label}</Text>
-      <View style={s.row}>{input.choices.map(choice => <Button key={choice.value} label={choice.label}
-        disabled={busy} selected={values[input.key] === choice.value} secondary onPress={() => change(input.key, choice.value)} />)}</View>
-    </View> : <Field key={input.key} label={input.label} value={values[input.key]} onChange={value => change(input.key, value)} />)}
+    {editor.inputs.map(input => input.choices ? <WorkflowChoice key={input.key} label={input.label} choices={input.choices}
+      value={values[input.key]} disabled={busy} onChange={value => change(input.key, value)} />
+      : <Field key={input.key} label={input.label} value={values[input.key]} onChange={value => change(input.key, value)}
+        disabled={busy} multiline={input.multiline} inputMode={input.inputMode} />)}
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     <View style={s.row}><Button label={busy ? 'Saving' : 'Confirm'} disabled={busy} onPress={() => void save()} />
       <Button label="Cancel" secondary disabled={busy} onPress={onClose} /></View>
   </View>;
 }
 
+function WorkflowChoice({ label, choices, value, disabled, onChange }: {
+  label: string; choices: Choice[]; value: string; disabled: boolean; onChange: (value: string) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState(false);
+  const searchable = choices.length > 8;
+  const selected = choices.find(choice => choice.value === value);
+  const matches = choices.filter(choice => choice.label.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
+  return <View style={s.form}>
+    <Text style={s.label}>{label}</Text>
+    {searchable && <View style={s.row}><Text style={s.subtitle}>{selected?.label ?? 'Choose an option'}</Text>
+      <Button label={expanded ? 'Close choices' : 'Change selection'} secondary disabled={disabled} onPress={() => { setSearch(''); setExpanded(!expanded); }} />
+    </View>}
+    {(!searchable || expanded) && <>
+      {searchable && <Field label={`Search ${label.toLocaleLowerCase()}`} value={search} onChange={setSearch} disabled={disabled} />}
+      <View style={s.row}>{matches.slice(0, 8).map(choice => <Button key={choice.value} label={choice.label}
+        disabled={disabled} selected={value === choice.value} secondary onPress={() => { onChange(choice.value); setExpanded(false); }} />)}</View>
+      {matches.length > 8 && <Text style={s.small}>Search to see more matches.</Text>}
+      {!matches.length && <Text style={s.small}>No matching options.</Text>}
+    </>}
+  </View>;
+}
+
 export function WorkflowWorkspace({ org, userId, membership, snapshot, initialSection, initialMonth }: {
   org: string; userId: string; membership: Member; snapshot: Snapshot; initialSection?: string; initialMonth?: string;
 }) {
-  const [period, setPeriod] = useState(() => initialMonth && isDateKey(initialMonth + '-01') ? initialMonth : companyDateKey().slice(0, 7));
-  const [periodInput, setPeriodInput] = useState(period);
+  const [period, setPeriod] = useState(() => initialMonth && !initialMonth.startsWith('0000') && isDateKey(initialMonth + '-01')
+    ? initialMonth : companyDateKey().slice(0, 7));
   const [section, setSection] = useState(initialSection ?? 'My records');
   const [editor, setEditor] = useState<Editor | null>(null);
   const [revision, setRevision] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<{ period: string; operations: Operations; payroll: Workbench | null } | null>(null);
+  const [updated, setUpdated] = useState(false);
   const isHR = membership.role === 'hr';
   const current = data?.period === period ? data : null;
   const operations = current?.operations;
@@ -118,6 +144,7 @@ export function WorkflowWorkspace({ org, userId, membership, snapshot, initialSe
     setBusy(true);
     try {
       await rpc(name, { p_org: org, ...values });
+      setUpdated(true);
       setRevision(value => value + 1);
     } finally { setBusy(false); }
   }, [org]);
@@ -131,27 +158,25 @@ export function WorkflowWorkspace({ org, userId, membership, snapshot, initialSe
           ? await rpc('hr_payroll_workbench', { p_org: org, p_period: periodDate }) : null;
         if (!ignore) setData({ period, operations, payroll });
       } catch (error) {
-        if (!ignore) { setData(null); setError(message(error)); }
+        if (!ignore) {
+          const code = error && typeof error === 'object' && 'code' in error ? error.code : '';
+          setData(null);
+          setError(code === 'PGRST202' ? 'Workflows require a database update. Contact your workspace administrator.' : message(error));
+        }
       }
     })();
     return () => { ignore = true; };
   }, [org, period, periodDate, isHR, revision]);
 
-  function openMonth() {
-    try { month(periodInput); setError(''); setEditor(null); setPeriod(periodInput); }
-    catch (error) { setError(message(error)); }
-  }
   return <View style={s.card}>
     <Text accessibilityRole="header" style={s.heading}>Workflows</Text>
-    <View style={s.row}>{sections.map(item => <Button key={item} label={item} selected={active === item} secondary disabled={busy}
-      onPress={() => { setSection(item); setEditor(null); }} />)}</View>
-    <Field label="Month (YYYY-MM)" value={periodInput} onChange={setPeriodInput} />
-    <View style={s.row}>
-      <Button label="Open month" secondary disabled={busy} onPress={openMonth} />
-      <Button label="Refresh" secondary disabled={busy} onPress={() => { setError(''); setRevision(value => value + 1); }} />
-    </View>
-    <Text style={s.label}>{period}</Text>
+    <View style={s.row}>{sections.map(item => <Button key={item} label={item} selected={active === item} secondary disabled={busy || !!editor}
+      onPress={() => { setUpdated(false); setSection(item); }} />)}</View>
+    {!editor && active !== 'People tasks' && <MonthPicker period={period} onChange={next => { setUpdated(false); setError(''); setPeriod(next); }} disabled={busy} />}
+    {!editor && <View style={s.row}><Button label="Refresh" secondary disabled={busy} onPress={() => { setError(''); setRevision(value => value + 1); }} /></View>}
+    {editor && active !== 'People tasks' && <Text style={s.small}>{monthName(period)}</Text>}
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
+    {updated && !editor && !error && <Text accessibilityLiveRegion="polite" style={s.small}>Changes saved.</Text>}
     {!operations && !error && <Text style={s.small}>Loading workflows</Text>}
     {editor && <WorkflowForm editor={editor} onClose={() => setEditor(null)} />}
     {operations && !editor && <>
@@ -178,15 +203,15 @@ function PayrollReview({ payroll, operations, isHR, userId, period, call, setEdi
   function review(action: string) {
     setEditor({
       title: action === 'submit' ? 'Submit payroll to Finance' : action === 'return' ? 'Return payroll to HR' : 'Approve payroll and publish payslips',
-      inputs: [{ key: 'comment', label: action === 'return' ? 'Return comment' : 'Comment (optional)' }],
+      inputs: [{ key: 'comment', label: action === 'return' ? 'Return comment' : 'Comment (optional)', multiline: true }],
       save: ({ comment }) => call('hr_payroll_review', { p_period: month(period), p_action: action, p_version: run?.version ?? null, p_comment: comment }),
     });
   }
   function schedule() {
     setEditor({ title: 'Schedule recurring compensation', inputs: [
-      { key: 'employee', label: 'Employee', choices: employeeChoices },
+      { key: 'employee', label: 'Employee', choices: employeeChoices, pick: true },
       { key: 'effective', label: 'First payroll month (YYYY-MM)', initial: period },
-      { key: 'basic', label: 'New monthly basic pay (ZMW)' }, { key: 'allowance', label: 'New recurring allowances (ZMW)', initial: '0' },
+      { key: 'basic', label: 'New monthly basic pay (ZMW)', inputMode: 'decimal' }, { key: 'allowance', label: 'New recurring allowances (ZMW)', initial: '0', inputMode: 'decimal' },
       { key: 'reason', label: 'Reason for change' },
     ], save: ({ employee, effective, basic, allowance, reason }) => call('hr_schedule_compensation', {
       p_employee: required(employee), p_effective: month(effective), p_basic: amount(basic), p_allowance: amount(allowance), p_reason: required(reason),
@@ -202,7 +227,7 @@ function PayrollReview({ payroll, operations, isHR, userId, period, call, setEdi
       {isHR && <Button label="Schedule pay change" disabled={!employeeChoices.length} secondary onPress={schedule} />}
       {isHR && <Button label="Finance access" secondary onPress={() => setEditor({
         title: 'Finance review access', inputs: [
-          { key: 'member', label: 'Workspace member', choices: memberChoices.map(choice => ({
+          { key: 'member', label: 'Workspace member', pick: true, choices: memberChoices.map(choice => ({
             ...choice, label: payroll.reviewers.includes(choice.value) ? choice.label + ' (Finance)' : choice.label,
           })) },
           { key: 'access', label: 'Access', choices: options(['Grant', 'Revoke']) },
@@ -303,7 +328,7 @@ function MyRecords({ org, operations, isHR, userId, periodDate, call, setEditor 
     </View>)}
     <Text style={s.heading}>Payroll queries</Text>
     {ownEmployee && <Button label="Raise a payroll query" onPress={() => setEditor({ title: 'Payroll query for ' + periodDate.slice(0, 7),
-      inputs: [{ key: 'question', label: 'Question' }],
+      inputs: [{ key: 'question', label: 'Question', multiline: true }],
       save: ({ question }) => call('hr_payroll_query', { p_employee: ownEmployee, p_period: periodDate, p_question: required(question) }),
     })} />}
     {!operations.queries.length && <Text style={s.small}>No queries for this month.</Text>}
@@ -313,7 +338,7 @@ function MyRecords({ org, operations, isHR, userId, periodDate, call, setEditor 
       {!!query.reply && <Text style={s.small}>{query.reply}</Text>}
       {!query.resolved_at && (isHR || operations.finance) && <Button label={query.owner_id === userId ? 'Update query' : 'Take ownership or respond'}
         secondary onPress={() => setEditor({ title: 'Update payroll query', inputs: [
-          { key: 'reply', label: 'Reply (required to resolve)', initial: query.reply ?? '' },
+          { key: 'reply', label: 'Reply (required to resolve)', initial: query.reply ?? '', multiline: true },
           { key: 'status', label: 'Status', choices: options(['Keep open', 'Resolve']) },
         ], save: ({ reply, status }) => call('hr_reply_payroll_query', { p_id: query.id, p_reply: reply, p_resolve: status === 'Resolve' }) })} />}
     </View>)}
@@ -336,8 +361,8 @@ function Attendance({ operations, isHR, manager, userId, periodDate, call, setEd
     {!!operations.expected_timesheets.length && <Text style={s.small}>Missing timesheets · {operations.expected_timesheets.join(', ')}</Text>}
     {employee && !operations.payroll_locked && (!mine || mine.status === 'returned') && <Button label={mine ? 'Resubmit timesheet' : 'Submit timesheet'} onPress={() => setEditor({
       title: 'Monthly timesheet', inputs: [
-        { key: 'regular', label: 'Regular time in minutes', initial: String(mine?.regular_minutes ?? 0) },
-        { key: 'overtime', label: 'Overtime in minutes', initial: String(mine?.overtime_minutes ?? 0) },
+        { key: 'regular', label: 'Regular time in minutes', initial: String(mine?.regular_minutes ?? 0), inputMode: 'numeric' },
+        { key: 'overtime', label: 'Overtime in minutes', initial: String(mine?.overtime_minutes ?? 0), inputMode: 'numeric' },
       ],
       save: ({ regular, overtime }) => call('hr_submit_timesheet', {
         p_employee: employee, p_period: periodDate, p_regular: minutes(regular), p_overtime: minutes(overtime), p_version: mine?.version ?? null,
@@ -353,7 +378,7 @@ function Attendance({ operations, isHR, manager, userId, periodDate, call, setEd
       {(isHR || manager) && !operations.payroll_locked && entry.status === 'submitted' && entry.submitted_by !== userId && <Button label="Review timesheet" secondary onPress={() => setEditor({
         title: 'Review ' + entry.name + ' timesheet', inputs: [
           { key: 'decision', label: 'Decision', choices: options(['Approve', 'Return']) },
-          { key: 'overtime', label: 'Approved overtime pay (ZMW)', initial: '0' },
+          { key: 'overtime', label: 'Approved overtime pay (ZMW)', initial: '0', inputMode: 'decimal' },
         ],
         save: ({ decision, overtime }) => call('hr_review_timesheet', {
           p_id: entry.id, p_version: entry.version, p_approve: decision === 'Approve', p_amount: decision === 'Approve' ? amount(overtime) : 0,
@@ -368,7 +393,7 @@ const categories = ['onboarding', 'offboarding', 'renewal', 'probation'];
 function PeopleTasks({ operations, isHR, userId, call, setEditor, employeeChoices, memberChoices }: Panel & PeopleChoices & { isHR: boolean; userId: string }) {
   function create(renewal?: Renewal) {
     setEditor({ title: renewal ? 'Assign contract renewal review' : 'Assign people task', inputs: [
-      { key: 'employee', label: 'Employee', initial: renewal?.employee_id, choices: employeeChoices },
+      { key: 'employee', label: 'Employee', initial: renewal?.employee_id, choices: employeeChoices, pick: true },
       { key: 'owner', label: 'Task owner', initial: renewal?.manager_user_id ?? userId, choices: memberChoices },
       { key: 'category', label: 'Task type', initial: renewal ? 'renewal' : undefined, choices: options(categories) },
       { key: 'title', label: 'Task', initial: renewal ? 'Review ' + renewal.title : undefined },
@@ -384,10 +409,10 @@ function PeopleTasks({ operations, isHR, userId, call, setEditor, employeeChoice
       <Button label="Create checklist" disabled={!employeeChoices.length} secondary onPress={() => setEditor({
         title: 'Create an onboarding or offboarding checklist',
         inputs: [
-          { key: 'employee', label: 'Employee', choices: employeeChoices },
+          { key: 'employee', label: 'Employee', choices: employeeChoices, pick: true },
           { key: 'category', label: 'Checklist type', choices: options(['onboarding', 'offboarding']) },
           { key: 'due', label: 'Due date (YYYY-MM-DD)', initial: companyDateKey() },
-          ...['HR', 'Manager', 'Finance', 'IT'].map(team => ({ key: team, label: team + ' task owner', choices: memberChoices })),
+          ...['HR', 'Manager', 'Finance', 'IT'].map(team => ({ key: team, label: team + ' task owner', choices: memberChoices, pick: true })),
         ],
         save: values => call('hr_create_checklist', {
           p_employee: required(values.employee), p_category: values.category, p_due: date(values.due),
@@ -410,7 +435,7 @@ function PeopleTasks({ operations, isHR, userId, call, setEditor, employeeChoice
       {!task.completed_at && (isHR || task.owner_id === userId) && <Button label="Record outcome" secondary onPress={() => {
         const schedule = isHR && ['renewal', 'probation'].includes(task.category);
         setEditor({ title: task.title, inputs: [
-          { key: 'result', label: 'Outcome or completion notes' },
+          { key: 'result', label: 'Outcome or completion notes', multiline: true },
           ...(schedule ? [
             { key: 'effective', label: 'New pay effective month (optional, YYYY-MM)' },
             { key: 'basic', label: 'New basic pay (ZMW)' }, { key: 'allowance', label: 'New allowances (ZMW)', initial: '0' },
