@@ -7,8 +7,9 @@ import { configured, createPasswordRecoveryClient, supabase } from './client';
 import { calendarDays, calendarMonth, companyDateKey, isDateKey, monthlyAgenda } from './leaveCalendar';
 import { contractEndStatus } from './contractDates';
 import { CompanySettingsScreen } from './CompanySettings';
-import { CompanyPhoneVerification, CompanySignup } from './CompanySignup';
-import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadCompanySettings, loadContracts, loadOrganizations, loadPayrollDrafts, loadSnapshot, Member, Organization, PayPoint, PayrollDraft, rpc, Snapshot } from './api';
+import { CompanySignup, EmployeeSignIn, PhoneVerification } from './CompanySignup';
+import { zambianMobile } from './companyRegistration';
+import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadCompanySettings, loadContracts, loadOrganizations, loadPayrollDrafts, loadPendingPhone, loadSnapshot, Member, Organization, PayPoint, PayrollDraft, rpc, Snapshot } from './api';
 import { money, weekdays } from '../domain';
 import { AuthCover, Brand, Button, colors, Field, Rings, s, WorkspaceNav } from './workspaceDesign';
 
@@ -46,21 +47,19 @@ function SignIn() {
   const [email, setEmail] = useState(''), [password, setPassword] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   const [mode, setMode] = useState<'signin' | 'company' | 'member' | 'recovery'>('signin');
   async function authenticate() {
-    const signup = mode !== 'signin';
     if (busy) return;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || password.length < 8) { setMessage('Enter a valid email and a password of at least 8 characters.'); return; }
     setBusy(true); setMessage('');
     try {
-      const credentials = { email: email.trim(), password };
-      const result = signup
-        ? await supabase!.auth.signUp({ ...credentials, options: { data: { join_workspace: true } } })
-        : await supabase!.auth.signInWithPassword(credentials);
+      const result = await supabase!.auth.signInWithPassword({ email: email.trim(), password });
       if (result.error) throw result.error;
-      if (signup && !result.data.session) setMessage('Check your email to confirm your account, then return here and sign in.');
       setPassword('');
     } catch (err) { setMessage((err as Error).message); } finally { setBusy(false); }
   }
   if (mode === 'company') return <CompanySignup initialEmail={email} onBack={address => {
+    setEmail(address); setMode('signin'); setPassword(''); setMessage('');
+  }} />;
+  if (mode === 'member') return <EmployeeSignIn initialEmail={email} onBack={address => {
     setEmail(address); setMode('signin'); setPassword(''); setMessage('');
   }} />;
   if (mode === 'recovery') return <PasswordRecovery initialEmail={email} onBack={(notice, address) => {
@@ -71,17 +70,16 @@ function SignIn() {
   }} />;
 
   return <View style={{ gap: 15 }}>
-    <Text accessibilityRole="header" style={s.title}>{mode === 'member' ? 'Activate company access' : 'Sign in'}</Text>
-    {mode === 'member' && <Text style={s.subtitle}>Use the work email your HR administrator authorized.</Text>}
+    <Text accessibilityRole="header" style={s.title}>Sign in</Text>
     <Field label="Work email" value={email} onChange={setEmail} />
     <Field label="Password" value={password} onChange={setPassword} secure />
     {!!message && <Text accessibilityRole="alert" style={s.subtitle}>{message}</Text>}
-    <Button label={busy ? 'Please wait…' : mode === 'member' ? 'Activate access' : 'Sign in'} disabled={busy} onPress={() => void authenticate()} />
-    {mode === 'signin' ? <View style={s.row}>
+    <Button label={busy ? 'Please wait…' : 'Sign in'} disabled={busy} onPress={() => void authenticate()} />
+    <View style={s.row}>
       <Button label="Register a company" disabled={busy} onPress={() => { setMode('company'); setMessage(''); }} secondary />
-      <Button label="Activate HR-approved access" disabled={busy} onPress={() => { setMode('member'); setMessage(''); }} secondary />
+      <Button label="Employee sign in" disabled={busy} onPress={() => { setMode('member'); setMessage(''); }} secondary />
       <Button label="Forgot password?" disabled={busy} onPress={() => setMode('recovery')} secondary />
-    </View> : <Button label="Back to sign in" disabled={busy} onPress={() => { setMode('signin'); setMessage(''); }} secondary />}
+    </View>
   </View>;
 }
 
@@ -184,9 +182,9 @@ const leaveStatuses = ['All', 'Pending', 'Approved', 'Declined', 'Cancelled'] sa
 function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }) {
   const [organizations, setOrganizations] = useState<Organization[]>([]), [org, setOrg] = useState(''), [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(true), [message, setMessage] = useState('');
-  const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [showAccess, setShowAccess] = useState(false), [search, setSearch] = useState('');
+  const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [search, setSearch] = useState('');
   const [showAccount, setShowAccount] = useState(false);
-  const [pendingPhone, setPendingPhone] = useState<string | null>(null);
+  const [pendingPhone, setPendingPhone] = useState<Awaited<ReturnType<typeof loadPendingPhone>>>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [peopleSort, setPeopleSort] = useState<'Name' | 'Department'>('Name');
@@ -209,9 +207,8 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
     try {
       if (!org) {
         await rpc('hr_activate_workspace', {});
-        const { data: phone, error } = await supabase!.rpc('hr_pending_company_phone');
-        if (error && error.code !== 'PGRST202') throw error;
-        if (mounted.current && ticket === generation.current) setPendingPhone(typeof phone === 'string' ? phone : null);
+        const phone = await loadPendingPhone();
+        if (mounted.current && ticket === generation.current) setPendingPhone(phone);
       }
       const list = await loadOrganizations();
       const selected = list.some(o => o.id === org) ? org : list[0]?.id || '';
@@ -240,7 +237,6 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   function openTab(name: string) {
     setEditor(null);
     setShowLeave(false);
-    setShowAccess(false);
     router.setParams({ cloudtab: name });
   }
   const userEmail = session.user.email?.toLowerCase();
@@ -275,12 +271,15 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
     onSelect={name => { setShowAccount(false); if (name === 'People') setProfileId(null); openTab(name); }} />;
   if (pendingPhone) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
     <Brand />
-    <CompanyPhoneVerification initialPhone={pendingPhone} onVerified={async () => {
+    <PhoneVerification key={pendingPhone.kind + pendingPhone.phone} initialPhone={pendingPhone.phone}
+      employee={pendingPhone.kind === 'employee'} onVerified={async () => {
       await rpc('hr_activate_workspace', {});
-      const remainingPhone = await rpc('hr_pending_company_phone', {});
-      if (remainingPhone) throw new Error('Your number is still awaiting confirmation. Refresh and try again.');
+      const remainingPhone = await loadPendingPhone();
+      if (remainingPhone?.kind === pendingPhone.kind && remainingPhone.phone === pendingPhone.phone) {
+        throw new Error('Your number is still awaiting confirmation. Refresh and try again.');
+      }
       await refresh();
-      setPendingPhone(null);
+      setPendingPhone(remainingPhone);
     }} onSignOut={async () => {
       const { error } = await supabase!.auth.signOut({ scope: 'local' });
       if (error) throw error;
@@ -334,7 +333,6 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
         setSearch('');
         setDepartmentFilter('');
         setShowLeave(false);
-        setShowAccess(false);
         setLeaveSearch('');
         setLeaveEmployee(null);
         setApprovalSearch('');
@@ -360,7 +358,19 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
           {snapshot.employees.length > 1 && <View style={s.row}>{(['Name', 'Department'] as const).map(sort => <Button key={sort} label={`Sort by ${sort.toLowerCase()}`}
             selected={peopleSort === sort} secondary={peopleSort !== sort} onPress={() => setPeopleSort(sort)} />)}</View>}
         </>}
-        {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} org={org} employee={editor} snapshot={snapshot} busy={busy} onCancel={() => setEditor(null)} onSave={async values => { const ok = await act(() => rpc('hr_save_employee', { p_organization_id: org, ...values }), 'Employee saved'); if (ok) setEditor(null); }} />}
+        {editor && isHR && <EmployeeForm key={editor === 'new' ? 'new' : editor.id} org={org} employee={editor} snapshot={snapshot}
+          busy={busy} onCancel={() => setEditor(null)} onSave={async values => {
+            const ok = await act(async () => {
+              try { await rpc('hr_save_employee_access', { p_organization_id: org, ...values }); }
+              catch (err) {
+                if (typeof err === 'object' && err && 'code' in err && err.code === 'PGRST202') {
+                  throw new Error('Apply the employee onboarding migration in Supabase before saving employees.');
+                }
+                throw err;
+              }
+            }, editor === 'new' ? 'Employee added. Ask them to sign in with their work email to verify their mobile number.' : 'Employee saved');
+            if (ok) setEditor(null);
+          }} />}
         {profile && <EmployeeProfile employee={profile} employees={snapshot.employees} requests={snapshot.leave} payPoint={snapshot.payPoints.find(point => point.id === profile.pay_point_id)}
           onOpenProfile={id => { setEditor(null); setProfileId(id); }}
           onOpenLeave={() => {
@@ -441,7 +451,10 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
       {tab === 'Payroll' && isHR && <PayrollRegister key={org} org={org} employees={snapshot.employees} payPoints={snapshot.payPoints} />}
       {tab === 'Activity' && isHR && <ActivityHistory key={org} org={org} snapshot={snapshot} employees={employeesById} user={session.user} />}
       {tab === 'Settings' && isHR && <CompanySettingsScreen key={org} org={org} payPoints={snapshot.payPoints} onSaved={refresh} />}
-      {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text><Text style={s.subtitle}>Authorize a work email and role, then ask the team member to activate company access. Existing verified accounts receive access immediately.</Text><Button label="Grant access / link account" onPress={() => setShowAccess(true)} disabled={busy} />{showAccess && <AccessForm employees={snapshot.employees} busy={busy} onCancel={() => setShowAccess(false)} onSave={async values => { const ok = await act(() => rpc('hr_add_member', { p_organization_id: org, ...values }), 'Workspace access authorization saved'); if (ok) setShowAccess(false); }} />}{snapshot.members.map(member => <MemberAccess
+      {tab === 'Workspace' && isHR && <View style={s.card}><Text style={s.heading}>Workspace access</Text>
+        <Text style={s.subtitle}>Add employees in People. You can change roles here after employees verify their details.</Text>
+        <View style={s.row}><Button label="Open People" secondary onPress={() => { setProfileId(null); openTab('People'); }} /></View>
+        {snapshot.members.map(member => <MemberAccess
         key={`${org}:${member.user_id}:${member.role}`}
         member={member}
         name={snapshot.employees.find(e => e.user_id === member.user_id)?.name || (member.user_id === session.user.id ? session.user.email : member.user_id)}
@@ -475,6 +488,9 @@ function EmployeeForm({ org, employee, snapshot, busy, onCancel, onSave }: SaveF
   const [name, setName] = useState(e?.name || ''), [job, setJob] = useState(e?.job_title || ''), [department, setDepartment] = useState(e?.department || ''), [email, setEmail] = useState(e?.email || ''), [balance, setBalance] = useState(String(e?.leave_balance || 0)), [manager, setManager] = useState<string | null>(e?.manager_user_id || null), [error, setError] = useState('');
   const [payPoint, setPayPoint] = useState(e?.pay_point_id ?? null);
   const [staffNumber, setStaffNumber] = useState('');
+  const [phone, setPhone] = useState(e?.phone ?? '');
+  const pending = snapshot.invitations?.some(invitation => invitation.employee_id === e?.id) ?? false;
+  const [authorize, setAuthorize] = useState(!e);
   const [mode, setMode] = useState<'automatic' | 'manual' | 'legacy' | 'loading' | 'failed'>(e ? 'legacy' : 'loading');
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -494,11 +510,17 @@ function EmployeeForm({ org, employee, snapshot, busy, onCancel, onSave }: SaveF
       setError('Enter an employee number using letters, digits, dashes, underscores or slashes.');
       return;
     }
+    const mobile = zambianMobile(phone);
+    if ((!e || pending || authorize || phone.trim()) && !mobile) {
+      setError('Enter a Zambian mobile number, such as 097 123 4567 or +260 97 123 4567.');
+      return;
+    }
     setError('');
     void onSave({
       p_id: e?.id || null, p_version: e?.version || null, p_name: name, p_job_title: job, p_department: department,
       p_email: email, p_leave_balance: Number(balance), p_manager_user_id: manager,
-      ...(staffDetails && { p_staff_number: staffNumber || null, p_pay_point_id: payPoint, p_update_staff_details: !!e }),
+      p_phone: mobile, p_authorize: authorize, p_staff_number: staffNumber || null,
+      p_pay_point_id: payPoint, p_update_staff_details: !!e && staffDetails,
     });
   }
   return <View style={s.form}>
@@ -506,7 +528,12 @@ function EmployeeForm({ org, employee, snapshot, busy, onCancel, onSave }: SaveF
     <Field label="Full name" value={name} onChange={setName} />
     <Field label="Job title" value={job} onChange={setJob} />
     <Field label="Department" value={department} onChange={setDepartment} />
-    <Field label="Work email" value={email} onChange={setEmail} />
+    <Field label="Work email" value={email} onChange={setEmail} inputMode="email" />
+    {e?.user_id ? !!e.phone && <Text style={s.label}>Mobile number · {e.phone}</Text>
+      : <Field label="Zambian mobile number" value={phone} onChange={setPhone} inputMode="tel" />}
+    {!e && <Text style={s.small}>The employee will verify their work email and mobile number when they first sign in.</Text>}
+    {!!e && !e.user_id && !pending && <Button label="Authorize employee sign in" secondary
+      selected={authorize} onPress={() => setAuthorize(!authorize)} />}
     <Field label="Available leave days" value={balance} onChange={setBalance} />
     {mode === 'manual' && <Field label="Employee number" value={staffNumber} onChange={setStaffNumber} />}
     {mode === 'automatic' && <Text style={s.small}>An employee number will be assigned on save.</Text>}
@@ -539,6 +566,7 @@ const activityLabels: Record<string, string> = {
   'organization.pay_point_added': 'Pay point added',
   'employee.created': 'Employee added',
   'employee.updated': 'Employee updated',
+  'employee.account_linked': 'Employee account linked',
   'leave.requested': 'Leave requested',
   'leave.approved': 'Leave approved',
   'leave.declined': 'Leave declined',
@@ -551,6 +579,7 @@ const activityLabels: Record<string, string> = {
   'member.role_changed.employee': 'Role changed to employee',
   'member.revoked': 'Workspace access revoked',
   'invitation.cancelled': 'Pending authorization withdrawn',
+  'invitation.employee_verification': 'Employee verification authorized',
   'contract.created': 'Contract recorded',
   'contract.updated': 'Contract updated',
   'contract.reviewed': 'Contract reviewed',
@@ -1003,6 +1032,7 @@ function EmployeeProfile({ employee, employees, requests, payPoint, onOpenProfil
       <Text style={s.heading}>{employee.name}</Text>
       <Text style={s.subtitle}>{employee.job_title} · {employee.department}</Text>
       <Text selectable style={s.label}>{employee.email}</Text>
+      {!!employee.phone && <Text selectable style={s.label}>{employee.phone}</Text>}
       {!!employee.staff_number && <Text selectable style={s.label}>Employee number · {employee.staff_number}</Text>}
       {!!payPoint && <Text style={s.small}>Pay point · {payPoint.name}</Text>}
       <Text style={s.small}>{employee.user_id ? 'Account linked' : 'Account not linked'}</Text>
@@ -1213,9 +1243,4 @@ function MemberAccess({ member, name, protectedAccess, busy, onSave }: {
       </View>
     </>}
   </View>;
-}
-
-function AccessForm({ employees, busy, onCancel, onSave }: SaveForm & { employees: CloudEmployee[] }) {
-  const [email, setEmail] = useState(''), [role, setRole] = useState('employee'), [employee, setEmployee] = useState<string | null>(null);
-  return <View style={s.form}><Field label="Work email" value={email} onChange={setEmail} /><Text style={s.label}>Role</Text><View style={s.row}>{['employee', 'manager', 'hr'].map(r => <Button key={r} label={r.toUpperCase()} secondary={role !== r} onPress={() => setRole(r)} />)}</View><Text style={s.label}>Link employee record (matching email required)</Text><View style={s.row}><Button label="No employee record" secondary={employee !== null} onPress={() => setEmployee(null)} />{employees.filter(e => !e.user_id).map(e => <Button key={e.id} label={e.name} secondary={employee !== e.id} onPress={() => { setEmployee(e.id); setEmail(e.email); }} />)}</View><Text style={s.small}>HR can manage all records and company access. Managers see their assigned reports. Employees see only their own record and leave.</Text><View style={s.row}><Button label="Grant access" disabled={busy || !email.trim()} onPress={() => void onSave({ p_email: email.trim(), p_role: role, p_employee_id: employee })} /><Button label="Cancel" disabled={busy} secondary onPress={onCancel} /></View></View>;
 }

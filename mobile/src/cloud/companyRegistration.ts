@@ -12,3 +12,8 @@ export function registrationPhone(value: string) {
   const international = /^0[0-9]{9}$/.test(cleaned) ? '+260' + cleaned.slice(1) : cleaned;
   return /^\+[1-9][0-9]{7,14}$/.test(international) ? international : null;
 }
+
+export function zambianMobile(value: string) {
+  const phone = registrationPhone(value);
+  return phone && /^\+260[79]\d{8}$/.test(phone) ? phone : null;
+}

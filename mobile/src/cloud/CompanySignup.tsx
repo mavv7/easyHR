@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { supabase } from './client';
 import { companyTypes, registrationPhone } from './companyRegistration';
@@ -111,14 +111,62 @@ export function CompanySignup({ initialEmail, onBack }: { initialEmail: string; 
   </View>;
 }
 
-export function CompanyPhoneVerification({ initialPhone, onVerified, onSignOut }: {
-  initialPhone: string; onVerified: () => Promise<void>; onSignOut: () => Promise<void>;
+export function EmployeeSignIn({ initialEmail, onBack }: { initialEmail: string; onBack: (email: string) => void }) {
+  const [email, setEmail] = useState(initialEmail);
+  const [sentTo, setSentTo] = useState('');
+  const [code, setCode] = useState('');
+  const { busy, message, setMessage, run } = useVerificationAction();
+  const auth = supabase!.auth;
+  function send() {
+    return run(async () => {
+      const address = (sentTo || email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw new Error('Enter your work email address.');
+      const { error } = await auth.signInWithOtp({ email: address, options: { data: { employee_otp: true } } });
+      if (error && !['unexpected_failure', 'signup_disabled', 'user_not_found'].includes(error.code ?? '')) throw error;
+      setSentTo(address);
+      setCode('');
+      setMessage('If HR authorized this address, check your inbox for your sign-in code.');
+    });
+  }
+  function verify() {
+    return run(async () => {
+      if (!/^\d+$/.test(code.trim())) throw new Error('Enter the code from your work email.');
+      const { error } = await auth.verifyOtp({ email: sentTo, token: code.trim(), type: 'email' });
+      if (error) throw error;
+    });
+  }
+  return <View style={{ gap: 15 }}>
+    <Text accessibilityRole="header" style={s.title}>Employee sign in</Text>
+    {sentTo ? <>
+      <Text style={s.subtitle}>Enter the code sent to {sentTo}.</Text>
+      <Field label="Email code" value={code} onChange={setCode} inputMode="numeric" />
+      <Button label="Verify email code" disabled={busy} onPress={() => void verify()} />
+      <Button label="Resend email code" secondary disabled={busy} onPress={() => void send()} />
+      <Button label="Change email address" secondary disabled={busy} onPress={() => { setSentTo(''); setMessage(''); }} />
+    </> : <>
+      <Text style={s.subtitle}>Use the work email your HR administrator added in People.</Text>
+      <Field label="Work email" value={email} onChange={setEmail} inputMode="email" />
+      <Button label="Send email code" disabled={busy} onPress={() => void send()} />
+    </>}
+    {!!message && <Text accessibilityRole="alert" style={s.subtitle}>{message}</Text>}
+    <Button label="Back to sign in" secondary disabled={busy} onPress={() => onBack(email)} />
+  </View>;
+}
+
+export function PhoneVerification({ initialPhone, employee, onVerified, onSignOut }: {
+  initialPhone: string; employee: boolean; onVerified: () => Promise<void>; onSignOut: () => Promise<void>;
 }) {
   const [phone, setPhone] = useState(initialPhone);
   const [sentTo, setSentTo] = useState<string>();
   const [code, setCode] = useState('');
   const { busy, message, setMessage, run } = useVerificationAction();
   const auth = supabase!.auth;
+  const autoSent = useRef(false);
+  useEffect(() => {
+    if (!employee || autoSent.current) return;
+    autoSent.current = true;
+    void send();
+  });
 
   function send() {
     return run(async () => {
@@ -144,16 +192,18 @@ export function CompanyPhoneVerification({ initialPhone, onVerified, onSignOut }
 
   return <View style={s.card}>
     <Text accessibilityRole="header" style={s.heading}>Verify your mobile number</Text>
-    <Text style={s.subtitle}>Your email is verified. Confirm your mobile number to finish creating your company workspace.</Text>
+    <Text style={s.subtitle}>{employee
+      ? 'Your email is verified. Confirm the mobile number HR added to activate your workspace access.'
+      : 'Your email is verified. Confirm your mobile number to finish creating your company workspace.'}</Text>
     {sentTo ? <>
       <Text style={s.label}>Code sent to {sentTo}</Text>
       <Field label="SMS code" value={code} onChange={setCode} inputMode="numeric" />
       <Button label="Verify mobile number" disabled={busy} onPress={() => void verify(sentTo)} />
       <Button label="Resend SMS code" secondary disabled={busy} onPress={() => void send()} />
-      <Button label="Change mobile number" secondary disabled={busy} onPress={() => { setSentTo(undefined); setMessage(''); }} />
+      {!employee && <Button label="Change mobile number" secondary disabled={busy} onPress={() => { setSentTo(undefined); setMessage(''); }} />}
     </> : <>
-      <Field label="Mobile number" value={phone} onChange={setPhone} inputMode="tel" />
-      <Button label="Send SMS code" disabled={busy} onPress={() => void send()} />
+      {employee ? <Text style={s.label}>{phone}</Text> : <Field label="Mobile number" value={phone} onChange={setPhone} inputMode="tel" />}
+      <Button label={busy ? 'Sending SMS code…' : 'Send SMS code'} disabled={busy} onPress={() => void send()} />
     </>}
     {!!message && <Text accessibilityRole="alert" style={s.subtitle}>{message}</Text>}
     <Button label="Sign out" secondary disabled={busy} onPress={() => void run(onSignOut)} />

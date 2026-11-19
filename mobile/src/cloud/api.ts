@@ -2,7 +2,7 @@ import { supabase } from './client';
 import { collectPages } from './pagination';
 export type Organization = { id: string; name: string; owner_id: string };
 export type Member = { user_id: string; role: 'hr' | 'manager' | 'employee' };
-export type CloudEmployee = { id: string; organization_id: string; user_id: string | null; manager_user_id: string | null; name: string; job_title: string; department: string; email: string; leave_balance: number; version: number; staff_number?: string | null; pay_point_id?: string | null };
+export type CloudEmployee = { id: string; organization_id: string; user_id: string | null; manager_user_id: string | null; name: string; job_title: string; department: string; email: string; phone?: string | null; leave_balance: number; version: number; staff_number?: string | null; pay_point_id?: string | null };
 export type CloudLeave = { id: string; employee_id: string; created_at: string; start_date: string; end_date: string; days: number; reason: string; status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled' };
 export type Audit = { id: number; action: string; created_at: string; actor_id: string; record_id: string | null };
 export type Invitation = { email: string; role: Member['role']; employee_id: string | null };
@@ -20,6 +20,15 @@ export type PayPoint = { id: string; name: string; code: string | null };
 export type CompanySettings = NumberingPolicy & { profile: CompanyProfile; profile_version: number; numbering_version: number; company_type?: string | null };
 export type Snapshot = { employees: CloudEmployee[]; leave: CloudLeave[]; members: Member[]; audit: Audit[]; invitations: Invitation[] | null; payPoints: PayPoint[] };
 export const emptySnapshot: Snapshot = { employees: [], leave: [], members: [], audit: [], invitations: null, payPoints: [] };
+
+export async function loadPendingPhone() {
+  for (const kind of ['company', 'employee'] as const) {
+    const { data, error } = await supabase!.rpc(`hr_pending_${kind}_phone`);
+    if (error && error.code !== 'PGRST202') throw error;
+    if (typeof data === 'string') return { kind, phone: data };
+  }
+  return null;
+}
 
 export async function loadCompanySettings(org: string) {
   const { data, error } = await supabase!.from('hr_company_settings')

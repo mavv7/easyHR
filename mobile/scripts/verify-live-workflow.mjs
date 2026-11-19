@@ -32,11 +32,18 @@ export async function verifyLiveWorkflow(client) {
     await as(hr);
     await client.query('select public.hr_activate_workspace()');
     const org = await scalar('select id from public.hr_organizations');
-    const record = await scalar("select public.hr_save_employee($1,'Verification employee','Designer','Design',$2,10)", [org, email]);
-    await client.query("select public.hr_add_member($1,$2,'employee',$3)", [org, email, record]);
+    const mobile = '26097' + String(BigInt('0x' + employee.slice(-12)) % 10000000n).padStart(7, '0');
+    const record = await scalar(`select public.hr_save_employee_access($1,'Verification employee','Designer','Design',$2,10,$3,
+      null,null,null,null,null,false,true)`, [org, email, '+' + mobile]);
     await client.query('reset role');
     await client.query(`insert into auth.users(id,aud,role,email,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
       values($1,'authenticated','authenticated',$2,now(),'{}','{}',now(),now())`, [employee, email]);
+    await as(employee);
+    await client.query('select public.hr_activate_workspace()');
+    assert.equal(Number(await scalar('select count(*) from public.hr_employees')), 0);
+    assert.equal(await scalar('select public.hr_pending_employee_phone()'), '+' + mobile);
+    await client.query('reset role');
+    await client.query('update auth.users set phone=$2,phone_confirmed_at=now() where id=$1', [employee, mobile]);
     await as(employee);
     await client.query('select public.hr_activate_workspace()');
     assert.equal(Number(await scalar('select count(*) from public.hr_employees')), 1);

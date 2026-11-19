@@ -14,12 +14,12 @@ The connected MVP implements accounts, organization membership, employee records
 
 Apply `202611190007_company_signup_otp.sql` after the company settings migration. Enable the Email and Phone providers in Supabase Auth and require confirmation for both. Configure SMTP for external recipients and an SMS provider that can deliver to your intended destinations, including Zambian numbers. Set an appropriate Site URL for employee confirmation links.
 
-In the **Confirm signup** email template, use a code for new company registrations and retain the existing confirmation link for HR-approved team members and registrations started before the migration.
+In the **Confirm signup** email template, use a code for new company registrations and HR-authorized employee sign-ins. The fallback supports older registrations.
 
 ```html
-{{ if (index .Data "company_type") }}
+{{ if or (index .Data "company_type") (index .Data "employee_otp") }}
 <p>Your easyHR email verification code is <strong>{{ .Token }}</strong>.</p>
-<p>Enter this code in easyHR to continue registering your company.</p>
+<p>Enter this code in easyHR to continue.</p>
 {{ else }}
 <p><a href="{{ .ConfirmationURL }}">Confirm your easyHR email address</a></p>
 {{ end }}
@@ -27,14 +27,20 @@ In the **Confirm signup** email template, use a code for new company registratio
 
 Verify delivery with a controlled inbox and mobile number. After the email code is verified, the app requests an SMS for the same signed-in account. Workspace activation checks both confirmation timestamps in Supabase Auth and stores the verified email and mobile number, company type and TPIN in Company Settings.
 
+## Employee onboarding
+
+Apply `202611190008_employee_onboarding.sql` after the company signup migration. Use the **Confirm signup** template above. Set the **Magic Link** email template to include `{{ .Token }}` so returning employees can also enter an email code in easyHR.
+
+HR adds the employee from **People → Add employee** with their work email and Zambian mobile number. This prepares the authorization. The employee opens **Employee sign in**, verifies the email code, and then receives an SMS code at the number HR entered. The app links the account after both checks. HR can correct an unlinked employee's contact details under People or withdraw pending access under Workspace. Existing members retain access and earlier authorizations can still be completed.
+
 ## End-to-end acceptance flow
 
-1. As HR, add an employee with their work email and an explicitly chosen initial leave balance. This balance is an administrative allocation, not a statutory accrual calculation.
-2. As HR, open Workspace and select Grant access / link account. Choose the employee record, matching work email and Employee role. Then tell the employee to activate access using that address.
-3. On the employee device, choose Activate HR-approved access, use the authorized work email, confirm it and sign in. The app links the employee record during activation. HR can link an existing verified account immediately by granting its existing role.
+1. As HR, add an employee in People with their work email, Zambian mobile number and an initial leave allocation.
+2. Check **Workspace → Pending authorizations** for the new employee.
+3. On the employee device, choose **Employee sign in**, verify the email code, then verify the SMS code. Check that the pending authorization has become a linked workspace member.
 4. Refresh the employee's app. They should see only their own record. Submit leave for whole weekdays.
 5. As HR, refresh and approve the request. The request and employee balance update atomically. Refresh the employee app to see the outcome. Data also refreshes on foreground and every 30 seconds while active; this is polling, not Supabase Realtime.
-6. For manager approval, grant a verified account Manager access, then edit the employee and assign that manager. Managers see only their own record and assigned reports. Nobody can approve their own leave.
+6. For manager approval, change an activated employee's role to Manager in Workspace, then assign them to an employee under People. Managers see only their own record and assigned reports. Nobody can approve their own leave.
 
 ## Contracts and payroll drafts
 
