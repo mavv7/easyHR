@@ -1,3 +1,4 @@
+import { DateField } from './DateField';
 import React, { type ComponentRef, useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { Text } from '../typography';
@@ -404,9 +405,9 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
         </View>}
         {!!snapshot.leave.length && <>
           <Field label="Search leave by name, date or reason" value={leaveSearch} onChange={setLeaveSearch} />
-          <Field label="From date (YYYY-MM-DD)" value={leaveFrom} onChange={setLeaveFrom} />
-          <Field label="Through date (YYYY-MM-DD)" value={leaveThrough} onChange={setLeaveThrough} />
-          {!validRange && <Text accessibilityRole="alert" style={s.error}>Use valid dates in YYYY-MM-DD format, with the from date first.</Text>}
+          <DateField label="From date" value={leaveFrom} onChange={setLeaveFrom} />
+          <DateField label="Through date" value={leaveThrough} onChange={setLeaveThrough} />
+          {!validRange && <Text accessibilityRole="alert" style={s.error}>The from date must be on or before the through date.</Text>}
           {(!!leaveFrom || !!leaveThrough) && <Button label="Clear dates" secondary onPress={() => { setLeaveFrom(''); setLeaveThrough(''); }} />}
           <View style={s.row}>
             {leaveStatuses.map(status => <Button key={status} label={status} selected={status === leaveStatus} secondary={status !== leaveStatus} onPress={() => setLeaveStatus(status)} />)}
@@ -884,8 +885,8 @@ function ContractForm({ contract, employees, busy, onCancel, onSave }: SaveForm 
       {submitted && !employee && <Text accessibilityRole="alert" style={s.error}>Choose an employee.</Text>}
     </>}
     <Field label="Contract title" value={title} onChange={setTitle} error={submitted && !validTitle ? 'Enter 2 to 120 characters.' : undefined} />
-    <Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} error={submitted && !validStart ? 'Enter a valid start date.' : undefined} />
-    <Field label="End date (optional, YYYY-MM-DD)" value={end} onChange={setEnd} error={submitted && !validEnd ? 'Enter a valid date on or after the start date.' : undefined} />
+    <DateField label="Start date" value={start} onChange={setStart} error={submitted && !validStart ? 'Select a valid start date.' : undefined} />
+    <DateField label="End date (optional)" clearable value={end} onChange={setEnd} error={submitted && !validEnd ? 'Select a valid date on or after the start date.' : undefined} />
     <Field label="Monthly basic pay (optional, ZMW)" value={basic} onChange={setBasic} inputMode="decimal" error={submitted && !validBasic ? payrollAmountError : undefined} />
     <Field label="Allowances, bonuses, benefits and payment terms" value={payTerms} onChange={setPayTerms} multiline disabled={busy} error={submitted && !validPayTerms ? 'Use up to 2,000 characters.' : undefined} />
     <Text style={s.small}>Record how wages and benefits are calculated and when wages are paid. PAYE, NAPSA and NHIMA apply where required by law.</Text>
@@ -1170,8 +1171,8 @@ function LeaveForm({ employees, requests, busy, onCancel, onSave }: SaveForm & {
   return <View style={s.form}>
     <Text style={s.heading}>New leave request</Text>
     <View style={s.row}>{employees.map(entry => <Button key={entry.id} label={entry.name} selected={employeeId === entry.id} secondary={employeeId !== entry.id} onPress={() => setEmployeeId(entry.id)} />)}</View>
-    <Field label="Start date (YYYY-MM-DD)" value={start} onChange={setStart} />
-    <Field label="End date (YYYY-MM-DD)" value={end} onChange={setEnd} />
+    <DateField label="Start date" value={start} onChange={setStart} />
+    <DateField label="End date" value={end} onChange={setEnd} />
     {employee && <Text style={s.small}>{available} available · {reserved} reserved by pending requests</Text>}
     {days !== undefined && <Text style={s.label}>{days} working {days === 1 ? 'day' : 'days'} requested</Text>}
     {overlaps && <Text style={s.error}>These dates overlap a pending or approved request.</Text>}

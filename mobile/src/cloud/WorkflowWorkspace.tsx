@@ -1,3 +1,4 @@
+import { DateField } from './DateField';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { Text } from '../typography';
@@ -35,7 +36,7 @@ type Operations = {
 };
 type Action = (name: string, values: Record<string, unknown>) => Promise<void>;
 type Choice = { label: string; value: string };
-type Input = { key: string; label: string; initial?: string; choices?: Choice[]; pick?: boolean; multiline?: boolean; inputMode?: 'decimal' | 'numeric' };
+type Input = { key: string; label: string; initial?: string; choices?: Choice[]; pick?: boolean; date?: 'day' | 'month'; clearable?: boolean; multiline?: boolean; inputMode?: 'decimal' | 'numeric' };
 type Editor = { title: string; inputs: Input[]; save: (values: Record<string, string>) => Promise<void> };
 
 const options = (values: readonly string[]) => values.map(value => ({ label: value, value }));
@@ -51,7 +52,7 @@ const minutes = (value: string) => {
   return Number(value);
 };
 const date = (value: string) => {
-  if (!isDateKey(value)) throw new Error('Enter a valid date in YYYY-MM-DD format.');
+  if (!isDateKey(value)) throw new Error('Select a valid date.');
   return value;
 };
 const month = (value: string) => date(value + '-01');
@@ -86,6 +87,8 @@ function WorkflowForm({ editor, onClose }: { editor: Editor; onClose: () => void
     <Text style={s.heading}>{editor.title}</Text>
     {editor.inputs.map(input => input.choices ? <WorkflowChoice key={input.key} label={input.label} choices={input.choices}
       value={values[input.key]} disabled={busy} onChange={value => change(input.key, value)} />
+      : input.date ? <DateField key={input.key} label={input.label} value={values[input.key]} onChange={value => change(input.key, value)}
+        disabled={busy} monthOnly={input.date === 'month'} clearable={input.clearable} />
       : <Field key={input.key} label={input.label} value={values[input.key]} onChange={value => change(input.key, value)}
         disabled={busy} multiline={input.multiline} inputMode={input.inputMode} />)}
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
@@ -212,7 +215,7 @@ function PayrollReview({ payroll, operations, isHR, userId, period, call, setEdi
   function schedule() {
     setEditor({ title: 'Schedule recurring compensation', inputs: [
       { key: 'employee', label: 'Employee', choices: employeeChoices, pick: true },
-      { key: 'effective', label: 'First payroll month (YYYY-MM)', initial: period },
+      { key: 'effective', label: 'First payroll month', date: 'month', initial: period },
       { key: 'basic', label: 'New monthly basic pay (ZMW)', inputMode: 'decimal' }, { key: 'allowance', label: 'New recurring allowances (ZMW)', initial: '0', inputMode: 'decimal' },
       { key: 'reason', label: 'Reason for change' },
     ], save: ({ employee, effective, basic, allowance, reason }) => call('hr_schedule_compensation', {
@@ -299,7 +302,7 @@ function Reconciliation({ org, operations, call, setEditor }: Panel & { org: str
         {operations.finance && <Button label="Record remittance" secondary onPress={() => setEditor({
           title: 'Record ' + agency + ' remittance', inputs: [
             { key: 'total', label: 'Amount paid (ZMW)', initial: initialAmount(Math.max(balance, 0)) },
-            { key: 'date', label: 'Payment date (YYYY-MM-DD)', initial: companyDateKey() },
+            { key: 'date', label: 'Payment date', date: 'day', initial: companyDateKey() },
             { key: 'reference', label: 'Filing or receipt reference' },
           ],
           save: values => call('hr_record_remittance', { p_run: reconciliation.run_id, p_agency: agency, p_amount: amount(values.total),
@@ -358,7 +361,7 @@ function Attendance({ operations, isHR, manager, userId, periodDate, call, setEd
     {operations.payroll_locked && <Text style={s.small}>Attendance for this month is locked with payroll.</Text>}
     {isHR && !operations.payroll_locked && <Button label="Set attendance cut-off" secondary onPress={() => setEditor({
       title: 'Attendance cut-off',
-      inputs: [{ key: 'cutoff', label: 'Cut-off date (YYYY-MM-DD)', initial: cutoff ?? '' }],
+      inputs: [{ key: 'cutoff', label: 'Cut-off date', date: 'day', initial: cutoff ?? '' }],
       save: values => call('hr_set_attendance_cutoff', { p_period: periodDate, p_cutoff: date(values.cutoff) }),
     })} />}
     {!!operations.expected_timesheets.length && <Text style={s.small}>Missing timesheets · {operations.expected_timesheets.join(', ')}</Text>}
@@ -400,7 +403,7 @@ function PeopleTasks({ operations, isHR, userId, call, setEditor, employeeChoice
       { key: 'owner', label: 'Task owner', initial: renewal?.manager_user_id ?? userId, choices: memberChoices },
       { key: 'category', label: 'Task type', initial: renewal ? 'renewal' : undefined, choices: options(categories) },
       { key: 'title', label: 'Task', initial: renewal ? 'Review ' + renewal.title : undefined },
-      { key: 'due', label: 'Due date (YYYY-MM-DD)', initial: renewal?.end_date ?? companyDateKey() },
+      { key: 'due', label: 'Due date', date: 'day', initial: renewal?.end_date ?? companyDateKey() },
     ], save: values => call('hr_create_work_task', { p_employee: required(values.employee), p_owner: required(values.owner),
       p_category: values.category, p_title: required(values.title), p_due: date(values.due) }) });
   }
@@ -414,7 +417,7 @@ function PeopleTasks({ operations, isHR, userId, call, setEditor, employeeChoice
         inputs: [
           { key: 'employee', label: 'Employee', choices: employeeChoices, pick: true },
           { key: 'category', label: 'Checklist type', choices: options(['onboarding', 'offboarding']) },
-          { key: 'due', label: 'Due date (YYYY-MM-DD)', initial: companyDateKey() },
+          { key: 'due', label: 'Due date', date: 'day', initial: companyDateKey() },
           ...['HR', 'Manager', 'Finance', 'IT'].map(team => ({ key: team, label: team + ' task owner', choices: memberChoices, pick: true })),
         ],
         save: values => call('hr_create_checklist', {
@@ -440,7 +443,7 @@ function PeopleTasks({ operations, isHR, userId, call, setEditor, employeeChoice
         setEditor({ title: task.title, inputs: [
           { key: 'result', label: 'Outcome or completion notes', multiline: true },
           ...(schedule ? [
-            { key: 'effective', label: 'New pay effective month (optional, YYYY-MM)' },
+            { key: 'effective', label: 'New pay effective month (optional)', date: 'month' as const, clearable: true },
             { key: 'basic', label: 'New basic pay (ZMW)' }, { key: 'allowance', label: 'New allowances (ZMW)', initial: '0' },
           ] : []),
         ], save: values => {
