@@ -12,9 +12,9 @@ import { WorkflowWorkspace } from './WorkflowWorkspace';
 import { WorkflowDocument } from './WorkflowDocument';
 import { MonthPicker } from './MonthPicker';
 import { CompanySettingsScreen } from './CompanySettings';
-import { CompanySignup, EmployeeSignIn, PhoneVerification } from './CompanySignup';
+import { CompanySignup, EmployeeSignIn } from './CompanySignup';
 import { zambianMobile } from './companyRegistration';
-import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadCompanySettings, loadContracts, loadOrganizations, loadPayrollDrafts, loadPendingPhone, loadSnapshot, Member, Organization, PayPoint, PayrollDraft, rpc, Snapshot } from './api';
+import { Audit, CloudEmployee, CloudLeave, Contract, emptySnapshot, loadAuditPage, loadCompanySettings, loadContracts, loadOrganizations, loadPayrollDrafts, loadSnapshot, Member, Organization, PayPoint, PayrollDraft, rpc, Snapshot } from './api';
 import { money, weekdays } from '../domain';
 import { AuthCover, Brand, Button, colors, Field, Rings, s, WorkspaceNav } from './workspaceDesign';
 
@@ -189,7 +189,6 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   const [busy, setBusy] = useState(false), [fetching, setFetching] = useState(true), [message, setMessage] = useState('');
   const [editor, setEditor] = useState<CloudEmployee | 'new' | null>(null), [showLeave, setShowLeave] = useState(false), [search, setSearch] = useState('');
   const [showAccount, setShowAccount] = useState(false);
-  const [pendingPhone, setPendingPhone] = useState<Awaited<ReturnType<typeof loadPendingPhone>>>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [peopleSort, setPeopleSort] = useState<'Name' | 'Department'>('Name');
@@ -210,11 +209,7 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
     const ticket = ++generation.current;
     setFetching(true);
     try {
-      if (!org) {
-        await rpc('hr_activate_workspace', {});
-        const phone = await loadPendingPhone();
-        if (mounted.current && ticket === generation.current) setPendingPhone(phone);
-      }
+      if (!org) await rpc('hr_activate_workspace', {});
       const list = await loadOrganizations();
       const selected = list.some(o => o.id === org) ? org : list[0]?.id || '';
       const data = selected ? await loadSnapshot(selected, session.user.id) : emptySnapshot;
@@ -279,22 +274,6 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
   }) : [];
   const navigation = <WorkspaceNav tabs={org ? tabs : []} active={showAccount ? '' : tab} count={approvals.length} wide={wide} company={currentName}
     onSelect={name => { setShowAccount(false); if (name === 'People') setProfileId(null); openTab(name); }} />;
-  if (pendingPhone) return <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
-    <Brand />
-    <PhoneVerification key={pendingPhone.kind + pendingPhone.phone} initialPhone={pendingPhone.phone}
-      employee={pendingPhone.kind === 'employee'} onVerified={async () => {
-      await rpc('hr_activate_workspace', {});
-      const remainingPhone = await loadPendingPhone();
-      if (remainingPhone?.kind === pendingPhone.kind && remainingPhone.phone === pendingPhone.phone) {
-        throw new Error('Your number is still awaiting confirmation. Refresh and try again.');
-      }
-      await refresh();
-      setPendingPhone(remainingPhone);
-    }} onSignOut={async () => {
-      const { error } = await supabase!.auth.signOut({ scope: 'local' });
-      if (error) throw error;
-    }} />
-  </ScrollView>;
   return <View style={[s.frame, wide && s.desktop]}>
     {wide && navigation}
     <View style={s.page}>
@@ -379,7 +358,7 @@ function CompanyWorkspace({ session, wide }: { session: Session; wide: boolean }
                 }
                 throw err;
               }
-            }, editor === 'new' ? 'Employee added. Ask them to sign in with their work email to verify their mobile number.' : 'Employee saved');
+            }, editor === 'new' ? 'Employee added. Ask them to sign in and verify their work email.' : 'Employee saved');
             if (ok) setEditor(null);
           }} />}
         {profile && <EmployeeProfile employee={profile} employees={snapshot.employees} requests={snapshot.leave} payPoint={snapshot.payPoints.find(point => point.id === profile.pay_point_id)}
@@ -545,7 +524,7 @@ function EmployeeForm({ org, employee, snapshot, busy, onCancel, onSave }: SaveF
     <Field label="Work email" value={email} onChange={setEmail} inputMode="email" />
     {e?.user_id ? !!e.phone && <Text style={s.label}>Mobile number · {e.phone}</Text>
       : <Field label="Zambian mobile number" value={phone} onChange={setPhone} inputMode="tel" />}
-    {!e && <Text style={s.small}>The employee will verify their work email and mobile number when they first sign in.</Text>}
+    {!e && <Text style={s.small}>The employee will verify their work email when they first sign in.</Text>}
     {!!e && !e.user_id && !pending && <Button label="Authorize employee sign in" secondary
       selected={authorize} onPress={() => setAuthorize(!authorize)} />}
     <Field label="Available leave days" value={balance} onChange={setBalance} />

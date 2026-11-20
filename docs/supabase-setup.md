@@ -8,11 +8,11 @@ The connected MVP implements accounts, organization membership, employee records
 2. Copy `mobile/.env.example` to `mobile/.env.local` and fill in the project URL and **publishable key** from the project Connect/API dialog. A legacy anon key also works. Never put a service-role key, secret key or database password in an `EXPO_PUBLIC_*` variable: these values are included in application bundles.
 3. Configure [company signup verification](#company-signup-verification) in Supabase Auth before registering a company.
 4. Restart Expo with `cd mobile` then `npx.cmd expo start --clear`. The app shows a configuration screen if the URL/key are missing.
-5. Choose **Register a company**, enter the company details and confirm the email code, then request and confirm the SMS code. Each company starts with an empty workspace, Zambia and ZMW defaults, and its registrar as HR.
+5. Choose **Register a company**, enter the company details and confirm the email code. Each company starts with an empty workspace, Zambia and ZMW defaults, and its registrar as HR.
 
 ## Company signup verification
 
-Apply `202611190007_company_signup_otp.sql` after the company settings migration. Enable the Email and Phone providers in Supabase Auth and require confirmation for both. Configure SMTP for external recipients and an SMS provider that can deliver to your intended destinations, including Zambian numbers. Set an appropriate Site URL for employee confirmation links.
+Apply the migrations through `202611200014_email_only_verification.sql`. Enable the Email provider in Supabase Auth and require email confirmation. Configure SMTP for external recipients and set an appropriate Site URL. The Phone provider and SMS delivery are not needed.
 
 In the **Confirm signup** email template, use a code for new company registrations and HR-authorized employee sign-ins. The fallback supports older registrations.
 
@@ -25,19 +25,19 @@ In the **Confirm signup** email template, use a code for new company registratio
 {{ end }}
 ```
 
-Verify delivery with a controlled inbox and mobile number. After the email code is verified, the app requests an SMS for the same signed-in account. Workspace activation checks both confirmation timestamps in Supabase Auth and stores the verified email and mobile number, company type and TPIN in Company Settings.
+Verify delivery with a controlled inbox. Workspace activation requires a confirmed email. Company Settings stores the verified email, contact phone number, company type and TPIN.
 
 ## Employee onboarding
 
 Apply `202611190008_employee_onboarding.sql` after the company signup migration. Use the **Confirm signup** template above. Set the **Magic Link** email template to include `{{ .Token }}` so returning employees can also enter an email code in easyHR.
 
-HR adds the employee from **People → Add employee** with their work email and Zambian mobile number. This prepares the authorization. The employee opens **Employee sign in**, verifies the email code, and then receives an SMS code at the number HR entered. The app links the account after both checks. HR can correct an unlinked employee's contact details under People or withdraw pending access under Workspace. Existing members retain access and earlier authorizations can still be completed.
+HR adds the employee from **People → Add employee** with their work email and Zambian mobile number. This prepares the authorization. The employee opens **Employee sign in** and verifies the email code. The app links the account after email confirmation. HR can correct an unlinked employee's contact details under People or withdraw pending access under Workspace. Existing members retain access and earlier authorizations can still be completed.
 
 ## End-to-end acceptance flow
 
 1. As HR, add an employee in People with their work email, Zambian mobile number and an initial leave allocation.
 2. Check **Workspace → Pending authorizations** for the new employee.
-3. On the employee device, choose **Employee sign in**, verify the email code, then verify the SMS code. Check that the pending authorization has become a linked workspace member.
+3. On the employee device, choose **Employee sign in**, verify the email code. Check that the pending authorization has become a linked workspace member.
 4. Refresh the employee's app. They should see only their own record. Submit leave for whole weekdays.
 5. As HR, refresh and approve the request. The request and employee balance update atomically. Refresh the employee app to see the outcome. Data also refreshes on foreground and every 30 seconds while active; this is polling, not Supabase Realtime.
 6. For manager approval, change an activated employee's role to Manager in Workspace, then assign them to an employee under People. Managers see only their own record and assigned reports. Nobody can approve their own leave.
@@ -111,6 +111,5 @@ The database test applies the actual migration to PGlite (PostgreSQL in WASM), w
 
 - [Supabase React Native authentication](https://supabase.com/docs/guides/auth/quickstarts/react-native)
 - [Supabase authentication email templates](https://supabase.com/docs/guides/auth/auth-email-templates)
-- [Supabase SMS provider setup](https://supabase.com/docs/guides/auth/phone-login)
 - [Supabase row-level security](https://supabase.com/docs/guides/database/postgres/row-level-security)
 - [Expo SDK 58 SecureStore](https://docs.expo.dev/versions/v58.0.0/sdk/securestore/)

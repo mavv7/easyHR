@@ -21,15 +21,6 @@ export type CompanySettings = NumberingPolicy & { profile: CompanyProfile; profi
 export type Snapshot = { employees: CloudEmployee[]; leave: CloudLeave[]; members: Member[]; audit: Audit[]; invitations: Invitation[] | null; payPoints: PayPoint[] };
 export const emptySnapshot: Snapshot = { employees: [], leave: [], members: [], audit: [], invitations: null, payPoints: [] };
 
-export async function loadPendingPhone() {
-  for (const kind of ['company', 'employee'] as const) {
-    const { data, error } = await supabase!.rpc(`hr_pending_${kind}_phone`);
-    if (error && error.code !== 'PGRST202') throw error;
-    if (typeof data === 'string') return { kind, phone: data };
-  }
-  return null;
-}
-
 export async function loadCompanySettings(org: string) {
   const { data, error } = await supabase!.from('hr_company_settings')
     .select('*,hr_organizations(name,account_number)').eq('organization_id', org).single();

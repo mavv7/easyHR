@@ -24,8 +24,8 @@ export async function verifyLiveWorkflow(client) {
   try {
     for (const id of [hr, outsider]) {
       const phone = '1999' + String(BigInt('0x' + id.slice(-12)) % 10000000n).padStart(7, '0');
-      await client.query(`insert into auth.users(id,aud,role,email,email_confirmed_at,phone,phone_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
-        values($1,'authenticated','authenticated',$2,now(),$3,now(),'{}',$4,now(),now())`, [id, `${id}@example.invalid`, phone, {
+      await client.query(`insert into auth.users(id,aud,role,email,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
+        values($1,'authenticated','authenticated',$2,now(),'{}',$3,now(),now())`, [id, `${id}@example.invalid`, {
         company_name: `Verification company ${id}`, company_type: 'limited_company', tpin: '0123456789', registration_phone: '+' + phone,
       }]);
     }
@@ -38,12 +38,6 @@ export async function verifyLiveWorkflow(client) {
     await client.query('reset role');
     await client.query(`insert into auth.users(id,aud,role,email,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
       values($1,'authenticated','authenticated',$2,now(),'{}','{}',now(),now())`, [employee, email]);
-    await as(employee);
-    await client.query('select public.hr_activate_workspace()');
-    assert.equal(Number(await scalar('select count(*) from public.hr_employees')), 0);
-    assert.equal(await scalar('select public.hr_pending_employee_phone()'), '+' + mobile);
-    await client.query('reset role');
-    await client.query('update auth.users set phone=$2,phone_confirmed_at=now() where id=$1', [employee, mobile]);
     await as(employee);
     await client.query('select public.hr_activate_workspace()');
     assert.equal(Number(await scalar('select count(*) from public.hr_employees')), 1);

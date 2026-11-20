@@ -380,9 +380,10 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await assert.rejects(db.query(saveProfile, [org, 'Cross-company edit', details, 1]), /HR access required/);
       await assert.rejects(db.query(hire, [otherOrg, 'wrong-point@example.com', null, point]), /Choose a pay point in this company/);
     });
-    await t.test('HR onboarding requires the authorized email and Zambian mobile before linking', async () => {
+    await t.test('HR onboarding links only after the authorized email is confirmed', async () => {
       await db.exec('reset role');
       await db.exec(await readFile(new URL('../supabase/migrations/202611190008_employee_onboarding.sql', import.meta.url), 'utf8'));
+      await db.exec(await readFile(new URL('../supabase/migrations/202611200014_email_only_verification.sql', import.meta.url), 'utf8'));
       const hire = `select public.hr_save_employee_access($1,'New Starter','Designer','Design',$2,10,$3,
         null,null,null,'EMP-FLOW-TEST',null,false,true)`;
       const address = 'starter@example.com';
@@ -398,28 +399,16 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await db.exec('reset role');
       await assert.rejects(db.query("insert into auth.users values(gen_random_uuid(), 'unlisted@example.com', null, '{}')"), /approval required/);
       const user = await scalar('select gen_random_uuid()');
-      await db.query("insert into auth.users values($1,$2,null,'{}',$3,now())", [user, address, mobile.slice(1)]);
+      await db.query("insert into auth.users values($1,$2,null,'{}')", [user, address]);
       await as(user);
       await db.query('select public.hr_activate_workspace()');
       assert.equal(await scalar('select public.hr_pending_employee_phone()'), null);
       assert.equal(Number(await scalar('select count(*) from public.hr_employees')), 0);
       await db.exec('reset role');
-      await db.query("update auth.users set email_confirmed_at=now(),phone='260971000000' where id=$1", [user]);
-      await as(user);
-      await db.query('select public.hr_activate_workspace()');
-      assert.equal(await scalar('select public.hr_pending_employee_phone()'), mobile);
-      assert.equal(Number(await scalar('select count(*) from public.hr_employees')), 0);
-      await db.exec('reset role');
-      await db.query('update auth.users set phone=$2,phone_confirmed_at=null where id=$1', [user, mobile.slice(1)]);
-      await as(user);
-      await db.query('select public.hr_activate_workspace()');
-      assert.equal(Number(await scalar('select count(*) from public.hr_employees')), 0);
-      await db.exec('reset role');
-      await db.query('update auth.users set phone_confirmed_at=now() where id=$1', [user]);
+      await db.query("update auth.users set email_confirmed_at=now() where id=$1", [user]);
       await as(user);
       await db.query('select public.hr_activate_workspace()');
       await db.query('select public.hr_activate_workspace()');
-      assert.equal(await scalar('select public.hr_pending_employee_phone()'), null);
       assert.equal(await scalar('select id from public.hr_employees'), record);
       assert.equal(await scalar('select role from public.hr_members'), 'employee');
       await db.exec('reset role');
@@ -427,11 +416,6 @@ test('database isolation, authorization and atomic leave workflow', async t => {
       await as(ids.hr);
       const legacyMobile = '+260971000001';
       const existing = await scalar(hire.replace('EMP-FLOW-TEST', 'EMP-EXISTING'), [org, 'outsider@example.com', legacyMobile]);
-      await as(ids.outsider);
-      await db.query('select public.hr_activate_workspace()');
-      assert.equal(await scalar('select public.hr_pending_employee_phone()'), legacyMobile);
-      await db.exec('reset role');
-      await db.query('update auth.users set phone=$2,phone_confirmed_at=now() where id=$1', [ids.outsider, legacyMobile.slice(1)]);
       await as(ids.outsider);
       await db.query('select public.hr_activate_workspace()');
       assert.equal(await scalar('select user_id from public.hr_employees where id=$1', [existing]), ids.outsider);
